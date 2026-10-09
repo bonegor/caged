@@ -5,8 +5,9 @@ import { h, clear } from './dom';
 import { SCENARIOS, armyCost, enemyArmy, type Army, type Scenario } from '../scenarios/scenarios';
 import { generateMap } from '../scenarios/mapgen';
 import { drawPreview } from '../render/minimap';
-import { FACTIONS, UNIT_KINDS, UNIT_TYPES, type FactionId, type UnitKind, type ArmorClass } from '../sim/unitTypes';
+import { FACTIONS, UNIT_KINDS, UNIT_TYPES, type FactionId, type UnitKind } from '../sim/unitTypes';
 import { setPortrait } from './portraits';
+import { statsLine } from './unitInfo';
 import { settings, saveSettings } from '../settings';
 import { TEAM_COLORS, type BattleConfig } from '../game/battle';
 import type { Difficulty } from '../game/ai';
@@ -95,41 +96,6 @@ export function scenarioSelect(cb: { onBack(): void; onChoose(s: Scenario): void
 }
 
 // ---------------------------------------------------------------------------
-
-function bonusText(kind: UnitKind): string {
-  const a = UNIT_TYPES[kind].attack;
-  const parts: string[] = [];
-  const names: Partial<Record<ArmorClass, string>> = {
-    cavalry: 'cavalry',
-    spearman: 'pikemen',
-    archer: 'archers',
-    infantry: 'infantry',
-    siege: 'siege',
-  };
-  for (const [cls, v] of Object.entries(a.damage) as [ArmorClass, number][]) {
-    if (cls === 'melee' || cls === 'pierce') continue;
-    parts.push(`+${v} vs ${names[cls] ?? cls}`);
-  }
-  return parts.join(', ');
-}
-
-function statsLine(kind: UnitKind): HTMLElement {
-  const t = UNIT_TYPES[kind];
-  const a = t.attack;
-  const base = a.damage.melee ?? a.damage.pierce ?? 0;
-  const type = a.damage.melee !== undefined ? 'melee' : 'pierce';
-  const bonus = bonusText(kind);
-  return h(
-    'div',
-    { class: 'stats' },
-    h('span', null, h('b', null, 'HP '), t.hp),
-    h('span', null, h('b', null, 'Attack '), `${base} ${type}`, bonus ? ` (${bonus})` : ''),
-    h('span', null, h('b', null, 'Armour '), `${t.armor.melee ?? 0}/${t.armor.pierce ?? 0}`),
-    a.kind === 'ranged' ? h('span', null, h('b', null, 'Range '), a.range) : null,
-    a.splash ? h('span', null, h('b', null, 'Splash')) : null,
-    h('span', null, h('b', null, 'Speed '), t.speed),
-  );
-}
 
 const PRESETS: { name: string; mix: Partial<Record<UnitKind, number>> }[] = [
   { name: 'Balanced', mix: { footman: 3, pikeman: 3, archer: 3, knight: 1.2, catapult: 0.3 } },

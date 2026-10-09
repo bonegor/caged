@@ -3,6 +3,7 @@
 import { h, clear, svg, append } from './dom';
 import { ICONS, type IconName } from './icons';
 import { setPortrait } from './portraits';
+import { statsLine } from './unitInfo';
 import type { Battle, BattleResult } from '../game/battle';
 import { Minimap } from '../render/minimap';
 import { UNIT_KINDS, UNIT_TYPES, type UnitKind } from '../sim/unitTypes';
@@ -247,6 +248,7 @@ export class Hud {
         info.append(
           h('span', { class: 'name' }, UNIT_TYPES[u.kind].name, u.team === 1 ? ' (enemy)' : ''),
           h('span', { class: 'line' }, `HP ${Math.ceil(u.hp)} / ${u.type.hp}  ·  Kills ${u.kills}`),
+          statsLine(u.kind, false),
           h('span', { class: 'line' }, UNIT_TYPES[u.kind].counters),
         );
       } else {
