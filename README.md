@@ -159,8 +159,10 @@ npx vitest run --config bench/vitest.config.ts --reporter=verbose   # balance ha
 ```
 
 The balance harness runs equal-cost duels for every counter matchup, AI-vs-AI
-battles on each battlefield, a side-bias check and the difficulty ladder. Unit
-stats can be overridden for experiments:
+battles on each battlefield, a side-bias check, the difficulty ladder and a soak
+test that checks simulation invariants over 24 battles (no NaN positions, no
+units stuck in obstacles, every battle ends). Unit stats can be overridden for
+experiments:
 
 ```sh
 STATS='{"pikeman":{"hp":70}}' DUELS_ONLY=1 bench/run.sh
