@@ -2,7 +2,7 @@
 // settings and credits.
 
 import { h, clear } from './dom';
-import { SCENARIOS, armyCost, type Army, type Scenario } from '../scenarios/scenarios';
+import { SCENARIOS, armyCost, enemyArmy, type Army, type Scenario } from '../scenarios/scenarios';
 import { generateMap } from '../scenarios/mapgen';
 import { drawPreview } from '../render/minimap';
 import { FACTIONS, UNIT_KINDS, UNIT_TYPES, type FactionId, type UnitKind, type ArmorClass } from '../sim/unitTypes';
@@ -70,7 +70,12 @@ export function scenarioSelect(cb: { onBack(): void; onChoose(s: Scenario): void
         'div',
         { class: 'col' },
         h('div', null, h('h3', null, 'Your army'), h('p', { class: 'small muted' }, `${FACTIONS[s.player.faction].name}: ${armyLine(s.player.army)}`)),
-        h('div', null, h('h3', null, 'The enemy'), h('p', { class: 'small muted' }, `${FACTIONS[s.enemy.faction].name}: ${armyLine(s.enemy.army)}`)),
+        h(
+          'div',
+          null,
+          h('h3', null, 'The enemy'),
+          h('p', { class: 'small muted' }, `${FACTIONS[s.enemy.faction].name}: ${armyLine(enemyArmy(s, settings.difficulty))} (${settings.difficulty})`),
+        ),
         h('div', { class: 'row' }, h('span', { class: 'spacer' }), h('button', { class: 'btn primary', onclick: () => cb.onChoose(chosen) }, 'Prepare Army')),
       ),
     );
@@ -143,6 +148,12 @@ function presetArmy(mix: Partial<Record<UnitKind, number>>, budget: number): Arm
   while (cheap && armyCost(a, COSTS) + COSTS[cheap] <= budget) a[cheap]++;
   return a;
 }
+
+const DIFFICULTY_NOTES: Record<Difficulty, string> = {
+  easy: 'A smaller enemy army that reacts slowly and fights as one block. Good for a first battle.',
+  normal: 'An even fight. The enemy screens its archers and sends its knights around your flank.',
+  hard: 'A larger enemy army that reacts fast and hunts down exposed archers and siege.',
+};
 
 export function armySetup(scenario: Scenario, cb: { onBack(): void; onStart(cfg: BattleConfig, shape: FormationShape): void }): HTMLElement {
   const state = {
@@ -220,13 +231,14 @@ export function armySetup(scenario: Scenario, cb: { onBack(): void; onStart(cfg:
     );
 
     const enemyColor = TEAM_COLORS[enemyColorName()];
+    const foes = enemyArmy(scenario, state.difficulty);
     const enemyUnits = h(
       'div',
       { class: 'enemy-list' },
       ...UNIT_KINDS.map((k) => {
         const img = h('img', { class: 'portrait', alt: UNIT_TYPES[k].name });
         setPortrait(img, state.enemyFaction, k, enemyColor);
-        return h('div', { class: 'enemy-unit' }, img, h('b', null, scenario.enemy.army[k]), UNIT_TYPES[k].plural);
+        return h('div', { class: 'enemy-unit' }, img, h('b', null, foes[k]), UNIT_TYPES[k].plural);
       }),
     );
 
@@ -273,7 +285,7 @@ export function armySetup(scenario: Scenario, cb: { onBack(): void; onStart(cfg:
         { class: 'panel side' },
         h('div', { class: 'row' }, h('h3', null, 'The Enemy'), h('span', { class: 'spacer' }), factionChips(state.enemyFaction, (f) => (state.enemyFaction = f))),
         enemyUnits,
-        h('div', { class: 'row small muted' }, `Enemy strength: ${armyCost(scenario.enemy.army, COSTS)} points`),
+        h('div', { class: 'row small muted' }, `Enemy strength: ${armyCost(foes, COSTS)} points`),
         h(
           'div',
           { class: 'row' },
@@ -294,6 +306,7 @@ export function armySetup(scenario: Scenario, cb: { onBack(): void; onStart(cfg:
             ),
           ),
         ),
+        h('p', { class: 'small muted difficulty-note' }, DIFFICULTY_NOTES[state.difficulty]),
       ),
       h(
         'div',
@@ -327,7 +340,7 @@ export function armySetup(scenario: Scenario, cb: { onBack(): void; onStart(cfg:
                 {
                   scenario,
                   player: { faction: state.faction, army: { ...state.army }, color },
-                  enemy: { faction: state.enemyFaction, army: { ...scenario.enemy.army }, color: enemyColor },
+                  enemy: { faction: state.enemyFaction, army: foes, color: enemyColor },
                   difficulty: state.difficulty,
                 },
                 state.shape,

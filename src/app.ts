@@ -4,7 +4,7 @@
 import type { Application } from 'pixi.js';
 import { Battle, TEAM_COLORS, type BattleConfig } from './game/battle';
 import type { InputCallbacks } from './game/input';
-import { SCENARIOS, type Army, type Scenario } from './scenarios/scenarios';
+import { SCENARIOS, enemyArmy, type Army, type Scenario } from './scenarios/scenarios';
 import { armySetup, creditsModal, helpModal, loadingScreen, mainMenu, scenarioSelect, settingsModal } from './ui/screens';
 import { Hud } from './ui/hud';
 import { clear, h } from './ui/dom';
@@ -103,15 +103,15 @@ export class App {
     );
   }
 
-  private quickBattle(): void {
-    const s = SCENARIOS[Math.floor(Math.random() * SCENARIOS.length)];
+  quickBattle(id?: string): void {
+    const s = SCENARIOS.find((x) => x.id === id) ?? SCENARIOS[Math.floor(Math.random() * SCENARIOS.length)];
     const player = TEAM_COLORS[settings.playerColor] ?? TEAM_COLORS.blue;
     const enemy = settings.playerColor === 'red' ? TEAM_COLORS.blue : TEAM_COLORS.red;
     this.startBattle(
       {
         scenario: s,
         player: { faction: s.player.faction, army: { ...s.player.army }, color: player },
-        enemy: { faction: s.enemy.faction, army: { ...s.enemy.army }, color: enemy },
+        enemy: { faction: s.enemy.faction, army: enemyArmy(s, settings.difficulty), color: enemy },
         difficulty: settings.difficulty,
       },
       'line',
@@ -208,6 +208,7 @@ export class App {
     };
     const battle = await Battle.create(this.app, config, callbacks, (f, label) => loading.set(f, label), { shape });
     this.battle = battle;
+    (window as unknown as { __battle: Battle }).__battle = battle;
     this.screen?.remove();
     this.screen = null;
     const hud = new Hud(battle, {

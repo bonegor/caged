@@ -98,4 +98,20 @@ describe('formation movement', () => {
     }
     expect(backwards).toBe(0);
   });
+
+  it('keeps marching at full pace when units start ahead of their column slots', () => {
+    // Regression: units waiting for their slot used to count as lag and stall the column.
+    const world = new World(openMap(500), 6);
+    const army = spawnArmy(world, 0, { knight: 6, footman: 12, pikeman: 10, archer: 12, catapult: 2 }, 100, 380, 18);
+    world.commandMove(army, { x: 100, y: 380 }, { heading: -Math.PI / 4 });
+    run(world, 25, () => army[0].formation!.phase === 'idle');
+    world.commandMove(army, { x: 380, y: 100 });
+    const f = army[0].formation!;
+    expect(f.mode).toBe('march');
+    run(world, 12);
+    const s0 = f.s;
+    run(world, 10);
+    // Slowest member is a catapult (4.6 u/s); the anchor runs at 0.9 of that.
+    expect((f.s - s0) / 10).toBeGreaterThan(4.6 * 0.9 * 0.85);
+  });
 });

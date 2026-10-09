@@ -171,11 +171,30 @@ export class Formation {
   slotWorld(u: Unit): Vec2 {
     const slot = this.slots[u.slot];
     if (!slot) return { ...u.pos };
+    let raw: Vec2;
+    let centre: Vec2;
     if (this.layoutMode === 'march' && this.path) {
       const p = this.path.poseAt(this.s + slot.y);
-      return slotToWorld({ pos: p.pos, heading: p.heading }, { x: slot.x, y: 0 });
+      raw = slotToWorld({ pos: p.pos, heading: p.heading }, { x: slot.x, y: 0 });
+      centre = p.pos;
+    } else {
+      raw = slotToWorld(this.pose, slot);
+      centre = this.pose.pos;
     }
-    return slotToWorld(this.pose, slot);
+    return this.nav ? projectSlot(this.nav, raw, centre, u.radius) : raw;
+  }
+
+  /** Navigation grid, used to keep slots out of obstacles (set by the host on first update). */
+  nav: NavGrid | null = null;
+
+  /** Direction of march at a member's slot (the local path direction for column slots). */
+  slotForward(u: Unit): Vec2 {
+    let h = this.pose.heading;
+    if (this.layoutMode === 'march' && this.path) {
+      const slot = this.slots[u.slot];
+      if (slot) h = this.path.poseAt(this.s + slot.y).heading;
+    }
+    return { x: Math.cos(h), y: Math.sin(h) };
   }
 
   /** World position of a unit's slot in the destination (final) pose of the current order. */
@@ -206,6 +225,7 @@ export class Formation {
     opts: { heading?: number; width?: number; attackMove?: boolean; shape?: FormationShape; frontAnchored?: boolean } = {},
   ): void {
     if (!this.members.length) return;
+    this.nav = host.nav;
     if (opts.shape) this.shape = opts.shape;
     if (opts.width !== undefined) this.width = opts.width;
     this.attackMove = !!opts.attackMove;
@@ -242,6 +262,7 @@ export class Formation {
     }
     const maxRadius = Math.max(...this.members.map((m) => m.radius));
     anchor = host.nav.nearestPassable(anchor, maxRadius + 1, 60) ?? anchor;
+    anchor = fitAnchor(host.nav, battleSlots, anchor, heading);
     this.dest = anchor;
 
     const waypoints = host.nav.findPath(start, anchor, Math.min(battleExtent.halfWidth, maxRadius + 2)) ??
@@ -280,6 +301,7 @@ export class Formation {
 
   /** Re-forms in place with the given (or current) shape and heading. */
   reform(host: FormationHost, heading?: number): void {
+    this.nav = host.nav;
     const body = this.members.filter((u) => u.memberFlag !== 'straggler');
     const c = this.centroid(body.length ? body : undefined);
     const pos = host.nav.nearestPassable(c, Math.max(...this.members.map((m) => m.radius)) + 1, 40) ?? c;
@@ -401,6 +423,7 @@ export class Formation {
   /** Called once per tick before unit behaviour; sets desired velocities of formation-controlled members. */
   update(host: FormationHost, dt: number): void {
     if (!this.members.length) return;
+    this.nav = host.nav;
     if (this.relayoutAt === -2) this.relayoutAt = host.time + 0.5;
     if (this.relayoutAt > 0 && host.time >= this.relayoutAt) {
       this.relayoutAt = -1;
@@ -534,7 +557,8 @@ export class Formation {
       if (Number.isFinite(R)) v = Math.min(v, (kMin * vMin * R) / (R + halfWidth));
     }
     // Throttle while members lag behind their slots (Pottinger: the group waits).
-    const fwd = { x: Math.cos(this.pose.heading), y: Math.sin(this.pose.heading) };
+    // Only being *behind* (plus some of the sideways offset) counts: a member
+    // ahead of its slot is waiting for the slot, so the anchor must keep going.
     let lag = 0;
     let laggard: Unit | null = null;
     for (const u of active) {
@@ -543,9 +567,12 @@ export class Formation {
         continue;
       }
       const sw = this.slotWorld(u);
-      const along = (sw.x - u.pos.x) * fwd.x + (sw.y - u.pos.y) * fwd.y;
-      const off = Math.hypot(sw.x - u.pos.x, sw.y - u.pos.y);
-      const l = Math.max(along, off * 0.6);
+      const f = this.slotForward(u);
+      const ex = sw.x - u.pos.x;
+      const ey = sw.y - u.pos.y;
+      const along = ex * f.x + ey * f.y;
+      const lateral = Math.abs(ex * f.y - ey * f.x);
+      const l = Math.max(along, lateral * 0.5);
       if (l > lag) {
         lag = l;
         laggard = u;
@@ -609,7 +636,6 @@ export class Formation {
   /** Sets desired velocity for members the formation controls. */
   private steerMembers(host: FormationHost, dt: number): void {
     const moving = this.phase === 'moving' && !this.pivoting;
-    const fwd = { x: Math.cos(this.pose.heading), y: Math.sin(this.pose.heading) };
     for (const u of this.members) {
       if (!u.alive) continue;
       const slotW = this.slotWorld(u);
@@ -680,10 +706,11 @@ export class Formation {
       let vy = sv.y + FORMATION.gain * ey;
       if (moving) {
         // Never walk backwards against the march: wait for the slot instead of U-turning.
-        const along = vx * fwd.x + vy * fwd.y;
+        const f = this.slotForward(u);
+        const along = vx * f.x + vy * f.y;
         if (along < 0) {
-          vx -= along * fwd.x;
-          vy -= along * fwd.y;
+          vx -= along * f.x;
+          vy -= along * f.y;
         }
       }
       const sp = Math.hypot(vx, vy);
@@ -700,6 +727,64 @@ export class Formation {
   homeOf(u: Unit): Vec2 {
     return this.slotWorld(u);
   }
+}
+
+/**
+ * If many slots of a layout would land in obstacles at `anchor`, look nearby
+ * for an anchor where the formation fits better (fewest blocked slots, then
+ * the closest to the requested point).
+ */
+export function fitAnchor(nav: NavGrid, slots: Slot[], anchor: Vec2, heading: number): Vec2 {
+  const blockedAt = (p: Vec2) => {
+    let n = 0;
+    for (const s of slots) {
+      const w = slotToWorld({ pos: p, heading }, s);
+      if (!nav.passable(w.x, w.y, 1)) n++;
+    }
+    return n;
+  };
+  let best = anchor;
+  let bestBlocked = blockedAt(anchor);
+  if (bestBlocked <= slots.length * 0.08) return anchor;
+  let bestScore = bestBlocked * 10;
+  for (const r of [4, 8, 12, 18, 26, 36]) {
+    for (let k = 0; k < 12; k++) {
+      const a = (k / 12) * Math.PI * 2;
+      const p = { x: anchor.x + Math.cos(a) * r, y: anchor.y + Math.sin(a) * r };
+      if (!nav.passable(p.x, p.y, 2)) continue;
+      const b = blockedAt(p);
+      const score = b * 10 + r * 0.6;
+      if (score < bestScore) {
+        bestScore = score;
+        bestBlocked = b;
+        best = p;
+      }
+    }
+    if (bestBlocked === 0) break;
+  }
+  return best;
+}
+
+/**
+ * Keeps a slot out of obstacles: if a unit of this radius cannot stand there,
+ * slide the slot along the ray towards the formation centre to the last free
+ * point (so the formation hugs walls and tree lines instead of sending units
+ * into them); fall back to the nearest free spot.
+ */
+export function projectSlot(nav: NavGrid, raw: Vec2, centre: Vec2, radius: number): Vec2 {
+  const r = radius * 0.9;
+  if (nav.passable(raw.x, raw.y, r)) return raw;
+  const dx = centre.x - raw.x;
+  const dy = centre.y - raw.y;
+  const len = Math.hypot(dx, dy);
+  const steps = Math.ceil(len / 0.75);
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const x = raw.x + dx * t;
+    const y = raw.y + dy * t;
+    if (nav.passable(x, y, r)) return { x, y };
+  }
+  return nav.nearestPassable(raw, r, 20) ?? raw;
 }
 
 /** Points a unit's path at `goal`, re-pathing at most every `every` seconds or when the goal moved. */

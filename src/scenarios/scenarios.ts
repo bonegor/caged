@@ -160,3 +160,11 @@ for (const s of SCENARIOS) {
   const cost = armyCost(s.player.army, Object.fromEntries(UNIT_KINDS.map((k) => [k, UNIT_TYPES[k].cost])) as Record<UnitKind, number>);
   s.budget = Math.max(s.budget, Math.ceil(cost / 50) * 50);
 }
+
+/** The enemy fields a smaller army on Easy and a larger one on Hard. */
+export const DIFFICULTY_ARMY_SCALE = { easy: 0.8, normal: 1, hard: 1.2 } as const;
+
+export function enemyArmy(s: Scenario, difficulty: keyof typeof DIFFICULTY_ARMY_SCALE): Army {
+  const k = DIFFICULTY_ARMY_SCALE[difficulty];
+  return Object.fromEntries(UNIT_KINDS.map((u) => [u, s.enemy.army[u] ? Math.max(1, Math.round(s.enemy.army[u] * k)) : 0])) as Army;
+}

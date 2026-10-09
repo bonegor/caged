@@ -45,6 +45,8 @@ export interface Projectile {
   prevZ: number;
   angle: number;
   done: boolean;
+  /** Damage this arrow will do to its target if it lands (counted in target.incoming). */
+  expected: number;
 }
 
 export type GameEvent =
@@ -322,10 +324,16 @@ export class World implements FormationHost {
         case 'footman':
           if (ek === 'pikeman' || ek === 'archer') score -= 6;
           break;
-        case 'archer':
+        case 'archer': {
           if (ek === 'pikeman') score -= 8;
           if (ek === 'knight') score += 10;
+          // Focus fire like a player would: finish wounded units, but don't
+          // waste arrows on ones the volley in the air will already kill.
+          const left = e.hp - e.incoming;
+          if (left <= 0) score += 60;
+          else score -= (1 - left / e.type.hp) * 24;
           break;
+        }
         case 'catapult': {
           // Prefer dense enemy clusters, avoid hitting friends.
           let foes = 0;
@@ -387,6 +395,11 @@ export class World implements FormationHost {
     if (u.target && !u.target.alive) {
       u.target = null;
       u.targetOrdered = false;
+    }
+    // An archer whose target is already doomed by arrows in flight looks for another.
+    if (u.target && !u.targetOrdered && u.kind === 'archer' && u.attackTime < 0 && u.target.hp <= u.target.incoming) {
+      u.target = null;
+      u.scanAt = 0;
     }
 
     // Retaliate / acquire.
@@ -486,7 +499,9 @@ export class World implements FormationHost {
       }
     }
 
-    if (d <= a.range && d >= a.minRange) {
+    // Units can overlap a little (d < 0); only siege has a real minimum range.
+    const tooClose = a.minRange > 0 && d < a.minRange;
+    if (d <= a.range && !tooClose) {
       u.desired = { x: 0, y: 0 };
       u.path = [];
       if (u.kind === 'catapult' && !u.deployed) {
@@ -497,7 +512,7 @@ export class World implements FormationHost {
       return;
     }
 
-    if (d < a.minRange) {
+    if (tooClose) {
       // Too close for a catapult: give up on this target.
       u.target = null;
       u.targetOrdered = false;
@@ -605,6 +620,9 @@ export class World implements FormationHost {
     }
     const speed = a.projectileSpeed ?? 50;
     const duration = Math.max(0.15, dist(u.pos, aim) / speed);
+    // Only well-aimed arrows count towards the target's incoming damage.
+    const expected = kind === 'arrow' && aim.x === t.pos.x && aim.y === t.pos.y ? computeDamage(a, t.type) : 0;
+    t.incoming += expected;
     const z0 = kind === 'stone' ? 2.2 : 2.6;
     const p: Projectile = {
       id: this.nextProjectileId++,
@@ -624,6 +642,7 @@ export class World implements FormationHost {
       prevZ: z0,
       angle: 0,
       done: false,
+      expected,
     };
     this.projectiles.push(p);
     this.events.push({ type: 'shoot', unit: u, projectile: p });
@@ -645,6 +664,7 @@ export class World implements FormationHost {
 
   private resolveImpact(p: Projectile): void {
     const a = p.source.type.attack;
+    if (p.expected && p.target) p.target.incoming = Math.max(0, p.target.incoming - p.expected);
     if (p.kind === 'stone' && a.splash) {
       const s = a.splash;
       let any = false;

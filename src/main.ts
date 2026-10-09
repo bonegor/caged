@@ -18,7 +18,10 @@ async function boot(): Promise<void> {
   // Handy for debugging from the console.
   (window as unknown as { __game: App; __app: Application }).__game = game;
   (window as unknown as { __app: Application }).__app = app;
-  await game.mainMenu();
+  // ?battle=<scenario id> jumps straight into a battle (handy for testing and sharing).
+  const direct = new URLSearchParams(location.search).get('battle');
+  if (direct) await game.quickBattle(direct);
+  else await game.mainMenu();
 }
 
 boot().catch((e) => {

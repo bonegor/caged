@@ -63,6 +63,8 @@ export class Unit {
   runDistance = 0;
   lastHitBy: Unit | null = null;
   lastHitAt = -100;
+  /** Damage in arrows already flying at this unit, so archers can avoid overkill. */
+  incoming = 0;
 
   // Catapults: deployed (can fire) vs packed (can move). setupLeft > 0 while switching.
   deployed = true;

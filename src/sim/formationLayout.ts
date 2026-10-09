@@ -155,7 +155,10 @@ function layoutLine(kinds: UnitKind[], shape: 'line' | 'staggered' | 'flank', wi
  */
 function layoutBox(kinds: UnitKind[]): Slot[] {
   const groups = groupKinds(kinds);
-  const p = Math.max(...groups.map((g) => Math.max(g.side, g.depth * 0.75)));
+  // One pitch for everybody (AoE2), but siege is left out of it: catapults sit
+  // in the roomy core, and letting them set the pitch makes the box far too sparse.
+  const pitchGroups = groups.filter((g) => g.category !== 'siege');
+  const p = Math.max(...(pitchGroups.length ? pitchGroups : groups).map((g) => Math.max(g.side, g.depth * 0.75)));
   const N = kinds.length;
   const side = Math.ceil(Math.sqrt(N));
   const off = (side - 1) / 2;
