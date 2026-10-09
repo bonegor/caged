@@ -183,7 +183,7 @@ export const UNIT_TYPES: Record<UnitKind, UnitType> = {
     cost: 190,
     setupTime: 2.4,
     stride: 10,
-    spacing: { side: 9, depth: 10 },
+    spacing: { side: 12, depth: 10 },
     counters: 'Strong vs packed infantry and archers. Weak vs knights.',
   },
 };

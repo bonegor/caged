@@ -223,7 +223,7 @@ Done while designing the system, with 200 random trials per case:
 | Footman | infantry | 1.0 | 2.7 × 2.9 | 7.5 |
 | Pikeman | infantry | 1.0 | 2.6 × 2.9 | 7.2 |
 | Archer | ranged | 1.0 | 2.6 × 3.0 | 7.8 |
-| Catapult | siege | 3.0 | 9 × 10 | 4.6 |
+| Catapult | siege | 3.0 | 12 × 10 | 4.6 |
 
 Footmen and pikemen share the infantry sub-formation and alternate, so pikes are
 spread along the whole front, as in AoE2.
@@ -263,9 +263,9 @@ catapults in the core. Within a ring, kinds are spread by largest deficit so
 the knights don't all end up on one side, and empty cells are spread evenly.
 
 **Marching column** (hidden, chosen automatically). Up to three abreast;
-wider units get fewer (knights two, catapults one or two). Sub-formations stay
-front to back, which puts the knights at the head and siege at the rear. The
-scenario army's column is 9 u wide and 63 u long.
+wider units get fewer (knights two abreast, catapults in single file).
+Sub-formations stay front to back, which puts the knights at the head and siege
+at the rear. The scenario army's column is about 8 u wide and 73 u long.
 
 ![The scenario army re-formed in line after a 90° turn](images/line-formation.webp)
 
