@@ -34,7 +34,7 @@ export function mainMenu(cb: { onPlay(): void; onQuick(): void; onHelp(): void; 
     h(
       'div',
       { class: 'menu-footer' },
-      'Unit and terrain art from 0 A.D. by Wildfire Games (CC-BY-SA 3.0). Behind this menu: the computer fighting itself.',
+      'Art, sound and music from 0 A.D. by Wildfire Games (CC-BY-SA 3.0). Behind this menu: the computer fighting itself.',
     ),
   );
 }
@@ -244,28 +244,24 @@ export function armySetup(scenario: Scenario, cb: { onBack(): void; onStart(cfg:
 
     const left = h(
       'div',
-      { class: 'panel side' },
+      { class: 'panel side army-panel' },
       h('div', { class: 'row' }, h('h3', null, 'Your Army'), h('span', { class: 'spacer' }), factionChips(state.faction, (f) => (state.faction = f))),
-      swatches,
-      h('div', { class: 'units' }, ...unitRows),
       h(
         'div',
         { class: 'row' },
+        swatches,
+        h('span', { class: 'spacer' }),
+        h('span', { class: 'small' }, `${total} soldiers`),
+        h('span', { class: 'small', style: over ? 'color:var(--bad)' : '' }, `${cost} / ${budget} points`),
+      ),
+      h('div', { class: `budget${over ? ' over' : ''}` }, h('div', { style: `width:${Math.min(100, (cost / budget) * 100)}%` })),
+      h('div', { class: 'units' }, ...unitRows),
+      h(
+        'div',
+        { class: 'row presets' },
         h('span', { class: 'small muted' }, 'Presets'),
         h('button', { class: 'btn small ghost', onclick: () => ((state.army = { ...scenario.player.army }), render()) }, 'Scenario'),
         ...PRESETS.map((p) => h('button', { class: 'btn small ghost', onclick: () => ((state.army = presetArmy(p.mix, budget)), render()) }, p.name)),
-      ),
-      h(
-        'div',
-        { class: 'col', style: 'gap:6px' },
-        h(
-          'div',
-          { class: 'row' },
-          h('span', null, `${total} soldiers`),
-          h('span', { class: 'spacer' }),
-          h('span', { style: over ? 'color:var(--bad)' : '' }, `${cost} / ${budget} points`),
-        ),
-        h('div', { class: `budget${over ? ' over' : ''}` }, h('div', { style: `width:${Math.min(100, (cost / budget) * 100)}%` })),
       ),
     );
 
@@ -319,21 +315,15 @@ export function armySetup(scenario: Scenario, cb: { onBack(): void; onStart(cfg:
         ),
         h('div', { class: 'row' }, h('span', { class: 'small muted' }, 'Starting formation'), shapeChips),
       ),
-    );
-
-    page.append(
-      h('div', { class: 'page-head' }, h('h2', null, scenario.name), h('p', { class: 'muted' }, scenario.tagline), h('span', { class: 'spacer' }), h('button', { class: 'btn small ghost', onclick: cb.onBack }, 'Back')),
-      h('div', { class: 'setup' }, left, right),
       h(
         'div',
-        { class: 'row' },
-        h('span', { class: 'spacer' }),
+        { class: 'start-block' },
         over ? h('span', { style: 'color:var(--bad)' }, 'Your army is over budget.') : null,
         total === 0 ? h('span', { style: 'color:var(--bad)' }, 'Recruit at least one soldier.') : null,
         h(
           'button',
           {
-            class: 'btn primary',
+            class: 'btn primary big',
             disabled: over || total === 0,
             onclick: () =>
               cb.onStart(
@@ -349,6 +339,11 @@ export function armySetup(scenario: Scenario, cb: { onBack(): void; onStart(cfg:
           'Begin Battle',
         ),
       ),
+    );
+
+    page.append(
+      h('div', { class: 'page-head' }, h('h2', null, scenario.name), h('p', { class: 'muted' }, scenario.tagline), h('span', { class: 'spacer' }), h('button', { class: 'btn small ghost', onclick: cb.onBack }, 'Back')),
+      h('div', { class: 'setup' }, left, right),
     );
   }
   render();
@@ -415,6 +410,7 @@ export function helpModal(onClose: () => void): HTMLElement {
             ...k('Right-drag', 'Move and set the front line: drag along where the front rank should stand'),
             ...k('A', 'Attack-move: then right-click the destination'),
             ...k('S', 'Stop and re-form'),
+            ...k('G', 'Regroup the selection into one formation where it stands'),
             ...k('Ctrl+1–9', 'Assign a control group; 1–9 selects it, twice centres on it'),
             ...k('Space', 'Centre on the selection'),
           ),
@@ -528,10 +524,15 @@ export function creditsModal(onClose: () => void): HTMLElement {
       h(
         'p',
         { style: 'font-size:17px;line-height:1.4' },
-        'Units, scenery, terrain textures and sounds come from ',
+        'Units, scenery, terrain textures, sounds and music come from ',
         h('b', null, '0 A.D.'),
-        ' by Wildfire Games, licensed CC-BY-SA 3.0. The sprites were rendered from its 3D models and animations for this game; ' +
-          'the derived art keeps the same license. See ',
+        ' by ',
+        h('a', { href: 'https://www.wildfiregames.com/', target: '_blank', rel: 'noopener' }, 'Wildfire Games'),
+        ', licensed ',
+        h('a', { href: 'https://creativecommons.org/licenses/by-sa/3.0/', target: '_blank', rel: 'noopener' }, 'CC-BY-SA 3.0'),
+        '. The sprites were rendered from its 3D models and animations for this game; ' +
+          'the derived art and audio keep the same license. Music: “Calm Before the Storm”, “Red Dawn” and ' +
+          '“Tale of Warriors” by the 0 A.D. music team (lead composer Omri Lahav). See ',
         h('code', null, 'public/assets/CREDITS.md'),
         '.',
       ),
