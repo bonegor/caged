@@ -141,6 +141,8 @@ export class App {
       };
       const b = await Battle.create(this.app, cfg, noopCallbacks, undefined, { spectator: true });
       if (this.battle || !this.screen) {
+        // A battle started while this one was loading.
+        b.destroy();
         return;
       }
       this.attract = b;

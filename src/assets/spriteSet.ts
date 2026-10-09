@@ -54,14 +54,27 @@ function imageData(img: HTMLImageElement): ImageData {
   return ctx.getImageData(0, 0, img.width, img.height);
 }
 
+/** The red channel of a greyscale mask image, one byte per pixel. */
+function maskChannel(img: HTMLImageElement): Uint8Array {
+  const rgba = imageData(img).data;
+  const out = new Uint8Array(rgba.length / 4);
+  for (let i = 0, j = 0; j < out.length; i += 4, j++) out[j] = rgba[i];
+  return out;
+}
+
+/** Team tints kept per sprite set; older ones are destroyed (two battles' worth). */
+const MAX_TEAM_TINTS = 4;
+
 function makeSource(canvas: HTMLCanvasElement): CanvasSource {
   return new CanvasSource({ resource: canvas, autoGenerateMipmaps: true, scaleMode: 'linear' });
 }
 
 /** Raw (untinted) data for one sprite set, shared by every team using it. */
 export class SpriteSetData {
-  private colorPages: ImageData[] = [];
-  private maskPages: ImageData[] = [];
+  // Only the source images are kept; their pixels are read again when a new
+  // team colour is needed, so raw RGBA copies don't sit in memory.
+  private colorImages: HTMLImageElement[] = [];
+  private maskPages: (Uint8Array | null)[] = [];
   private shadowSources: CanvasSource[] = [];
   private shadowTex = new Map<number, FrameTex>();
   private teams = new Map<string, TeamSprites>();
@@ -76,8 +89,8 @@ export class SpriteSetData {
       Promise.all(meta.masks.map((f) => loadImage(BASE + f))),
       Promise.all(meta.shadowImages.map((f) => loadImage(BASE + f))),
     ]);
-    set.colorPages = colors.map(imageData);
-    set.maskPages = masks.map(imageData);
+    set.colorImages = colors;
+    set.maskPages = colors.map((_, i) => (masks[i] ? maskChannel(masks[i]) : null));
     set.shadowSources = shadows.map((img) => {
       const c = document.createElement('canvas');
       c.width = img.width;
@@ -92,38 +105,43 @@ export class SpriteSetData {
   forTeam(color: [number, number, number]): TeamSprites {
     const key = color.join(',');
     let t = this.teams.get(key);
-    if (!t) {
+    if (t) {
+      // Most recently used goes last.
+      this.teams.delete(key);
+    } else {
       t = new TeamSprites(this, this.tint(color));
-      this.teams.set(key, t);
+    }
+    this.teams.set(key, t);
+    while (this.teams.size > MAX_TEAM_TINTS) {
+      const [oldKey, old] = this.teams.entries().next().value!;
+      this.teams.delete(oldKey);
+      old.destroy();
     }
     return t;
   }
 
   private tint(color: [number, number, number]): CanvasSource[] {
     const [tr, tg, tb] = color.map((c) => c / 255);
-    return this.colorPages.map((page, p) => {
-      if (!this.maskPages[p]) {
+    return this.colorImages.map((img, p) => {
+      const c = document.createElement('canvas');
+      c.width = img.width;
+      c.height = img.height;
+      const mask = this.maskPages[p];
+      if (!mask) {
         // Team-neutral set (environment): use the colours as they are.
-        const c = document.createElement('canvas');
-        c.width = page.width;
-        c.height = page.height;
-        c.getContext('2d')!.putImageData(page, 0, 0);
+        c.getContext('2d')!.drawImage(img, 0, 0);
         return makeSource(c);
       }
-      const mask = this.maskPages[p].data;
-      const out = new ImageData(new Uint8ClampedArray(page.data), page.width, page.height);
+      const out = imageData(img);
       const d = out.data;
-      for (let i = 0; i < d.length; i += 4) {
+      for (let i = 0, j = 0; i < d.length; i += 4, j++) {
         if (d[i + 3] === 0) continue;
-        const m = mask[i] / 255;
+        const m = mask[j] / 255;
         if (m < 0.01) continue;
         d[i] *= 1 - m + m * tr;
         d[i + 1] *= 1 - m + m * tg;
         d[i + 2] *= 1 - m + m * tb;
       }
-      const c = document.createElement('canvas');
-      c.width = page.width;
-      c.height = page.height;
       c.getContext('2d')!.putImageData(out, 0, 0);
       return makeSource(c);
     });
@@ -153,6 +171,18 @@ export class TeamSprites {
     readonly data: SpriteSetData,
     private sources: CanvasSource[],
   ) {}
+
+  /** Frees the GPU textures and canvases of this tint. */
+  destroy(): void {
+    for (const f of this.cache.values()) f.tex.destroy(false);
+    this.cache.clear();
+    for (const s of this.sources) {
+      const canvas = s.resource as HTMLCanvasElement;
+      s.destroy();
+      canvas.width = canvas.height = 0;
+    }
+    this.sources = [];
+  }
 
   frame(index: number): FrameTex {
     let f = this.cache.get(index);
