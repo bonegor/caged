@@ -16,7 +16,7 @@ import type { FormationShape } from '../sim/formationLayout';
 const COSTS = Object.fromEntries(UNIT_KINDS.map((k) => [k, UNIT_TYPES[k].cost])) as Record<UnitKind, number>;
 const hex = (c: [number, number, number]) => `rgb(${c.join(',')})`;
 
-export function mainMenu(cb: { onPlay(): void; onQuick(): void; onHelp(): void; onSettings(): void; onCredits(): void }): HTMLElement {
+export function mainMenu(cb: { onPlay(): void; onQuick(): void; onTester(): void; onHelp(): void; onSettings(): void; onCredits(): void }): HTMLElement {
   return h(
     'div',
     { class: 'screen shade main-menu' },
@@ -28,6 +28,7 @@ export function mainMenu(cb: { onPlay(): void; onQuick(): void; onHelp(): void; 
       { class: 'menu-buttons' },
       h('button', { class: 'btn primary', onclick: cb.onPlay }, 'Choose a Battle'),
       h('button', { class: 'btn', onclick: cb.onQuick }, 'Quick Battle'),
+      h('button', { class: 'btn', onclick: cb.onTester, title: 'Watch scripted formation drills, spawn armies and see slots, paths and trails' }, 'Formation Tester'),
       h('button', { class: 'btn', onclick: cb.onHelp }, 'How to Play'),
       h('button', { class: 'btn', onclick: cb.onSettings }, 'Settings'),
       h('button', { class: 'btn', onclick: cb.onCredits }, 'Credits'),

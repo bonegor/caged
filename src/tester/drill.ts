@@ -246,7 +246,10 @@ export class DrillRun {
 /** Runs a drill to completion without rendering. */
 export function runDrill(drill: Drill, map: MapInfo, maxSeconds = 400): DrillResult {
   const run = new DrillRun(drill, map);
-  while (!run.done && run.world.time < maxSeconds) run.world.step();
+  while (!run.done && run.world.time < maxSeconds) {
+    run.world.step();
+    run.world.events = []; // nobody listens; don't let them pile up
+  }
   if (!run.done) run.fail(`Did not finish within ${maxSeconds} s`);
   return run.result();
 }
@@ -376,11 +379,13 @@ export function crowding(label: string, from: string, to: string, limit: number)
 }
 
 /**
- * Members that make no progress towards their slot for 4 s while the
- * formation is moving or forming, without being right next to it.
+ * Members pinned in place: for 5 s (outside combat) they get no closer to a
+ * slot more than 3 u away and walk under 2.5 u in all (a unit walking round
+ * a tree is busy, not stuck).
  */
-export function stuck(label: string, from: string, to: string): Probe {
-  const hist = new Map<number, { t: number; d: number; pos: Vec2 }[]>();
+export function stuck(label: string, from: string, to?: string): Probe {
+  const hist = new Map<number, { t: number; d: number; walked: number }[]>();
+  const last = new Map<number, Vec2>();
   // What each member was heading for; a new plan restarts its history.
   const plan = new Map<number, { slots: unknown; path: unknown; slot: number; phase: string }>();
   const stuckIds = new Set<number>();
@@ -388,7 +393,7 @@ export function stuck(label: string, from: string, to: string): Probe {
     sample(r) {
       if (!inWindow(r, from, to)) return;
       const f = r.formation;
-      if (!f || (f.phase !== 'moving' && f.phase !== 'forming')) {
+      if (!f || f.phase === 'engaged') {
         hist.clear();
         return;
       }
@@ -403,13 +408,17 @@ export function stuck(label: string, from: string, to: string): Probe {
           continue;
         }
         const d = dist(u.pos, f.slotWorld(u));
+        const prevPos = last.get(u.id);
+        last.set(u.id, { ...u.pos });
         let h = hist.get(u.id);
         if (!h) hist.set(u.id, (h = []));
-        if (!h.length || r.t - h[h.length - 1].t >= 0.5) h.push({ t: r.t, d, pos: { ...u.pos } });
-        while (h.length && r.t - h[0].t > 4.01) h.shift();
-        if (h.length < 8 || d < 3) continue;
+        const walked = (h.length ? h[h.length - 1].walked : 0) + (prevPos ? dist(prevPos, u.pos) : 0);
+        if (!h.length || r.t - h[h.length - 1].t >= 0.5) h.push({ t: r.t, d, walked });
+        else h[h.length - 1].walked = walked;
+        while (h.length && r.t - h[0].t > 5.01) h.shift();
+        if (h.length < 10 || d < 3) continue;
         const old = h[0];
-        if (old.d - d < 0.5 && dist(old.pos, u.pos) < 1.5) stuckIds.add(u.id);
+        if (old.d - d < 0.5 && walked - old.walked < 2.5) stuckIds.add(u.id);
       }
     },
     checks: () => [check(label, stuckIds.size, 'max', 0, 'units')],
@@ -639,5 +648,16 @@ export function peak(label: string, from: string, to: string, limit: number, uni
       if (inWindow(r, from, to)) worst = Math.max(worst, fn(r));
     },
     checks: () => [check(label, worst === -Infinity ? 0 : worst, 'max', limit, unit)],
+  };
+}
+
+/** Sum of `fn` over time while a window is open (e.g. unit-seconds spent in some state). */
+export function total(label: string, from: string, to: string, limit: number, unit: string, fn: (r: DrillRun) => number): Probe {
+  let sum = 0;
+  return {
+    sample(r, dt) {
+      if (inWindow(r, from, to)) sum += fn(r) * dt;
+    },
+    checks: () => [check(label, sum, 'max', limit, unit)],
   };
 }

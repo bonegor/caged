@@ -1,10 +1,11 @@
 # Formation movement
 
 How units move together in this game: what Age of Empires II does, what other
-games and papers add, and how we built it. The code lives in
+games and papers add, how we built it, and how we test it. The code lives in
 `src/sim/formationLayout.ts` (slot layouts and assignment) and
 `src/sim/formation.ts` (the controller). The tests are
-`tests/formationLayout.test.ts` and `tests/formationMove.test.ts`.
+`tests/formationLayout.test.ts`, `tests/formationMove.test.ts` and the drill
+suite in `src/tester/` (section 6), which `tests/drills.test.ts` runs.
 
 World units: distances are in `u`. An infantryman has a radius of 1 u and a
 knight 1.9 u, so one AoE2 tile is roughly 4–5 u.
@@ -16,7 +17,8 @@ knight 1.9 u, so one AoE2 tile is roughly 4–5 u.
 3. [What we took from elsewhere](#3-what-we-took-from-elsewhere)
 4. [Our implementation](#4-our-implementation)
 5. [Parameters](#5-parameters)
-6. [Sources](#6-sources)
+6. [Testing: drills and the formation tester](#6-testing-drills-and-the-formation-tester)
+7. [Sources](#7-sources)
 
 ## 1. Summary
 
@@ -33,17 +35,17 @@ We copy that model and fix the problems AoE2 and 0 A.D. are known for:
 | Problem in the reference games | What we do instead |
 |---|---|
 | Greedy slot assignment makes units cross paths (0 A.D.) | Optimal assignment on squared distances per unit type (CAPT). Units keep their left/right and front/back order and their straight paths don't cross. |
-| Units turn around to "regroup" before advancing (AoE2 DE complaint) | During a march a member never moves backwards; a unit that is ahead of its slot waits for the slot to reach it. |
+| Units turn around to "regroup" before advancing (AoE2 DE complaint) | During a march a member never moves backwards; a unit that is ahead of its slot waits for the slot to reach it. A column files out from the army's front, and the rear falls in as it passes. |
 | Units arrive one by one when forming up | Synchronized arrival: every member gets a speed so that all of them arrive together. |
 | Outer ranks fall behind on corners | The anchor path has rounded corners and the anchor slows down on tight curves. |
 | Formations dive into one-unit gaps (0 A.D. paths with the largest unit's clearance) | The anchor's path keeps a 2 u margin beyond the largest unit's radius whenever such a route exists. Slots that land inside trees or water slide back towards the formation centre, and a destination inside a forest is moved to where the layout fits. |
 | A displaced catapult never catches up (0 A.D. siege can't run) | All members get a catch-up multiplier (1.4×, siege 1.2×), only while in formation and never in combat. |
-| One far unit makes the whole army wait (0 A.D. waits for everyone) | Members beyond the join radius walk on their own; a member that cannot keep up becomes a straggler after 6 s. Arrival counts at 90 % of members. |
+| One far unit makes the whole army wait (0 A.D. waits for everyone) | Members beyond the join radius walk on their own; a member that cannot keep up becomes a straggler after 6 s. A formation has arrived when everyone stands in place, but one member that can't get there holds it up for a few seconds at most. |
 
 ## 2. How Age of Empires II does it
 
 Most of what is known comes from openage's reverse-engineering notes, the AoE2
-DE patch notes and community wikis; see [Sources](#6-sources). Exact row-count
+DE patch notes and community wikis; see [Sources](#7-sources). Exact row-count
 formulas and slot distances in tiles are not published anywhere we could find.
 
 ### Sub-formations
@@ -141,7 +143,8 @@ We borrowed the controller-plus-offsets model, the catch-up multiplier, the
 3-wide column, re-forming after combat and pass-through inside a formation. We
 avoided its greedy assignment (crossing paths), pathing with the largest
 member's clearance (squeezing into tiny gaps), siege without catch-up, and
-waiting for *all* members before re-forming (one chaser stalls everyone).
+waiting for *all* members with no time limit before re-forming (one chaser
+stalls everyone).
 
 ### Dave Pottinger (Ensemble Studios, 1999)
 
@@ -240,9 +243,12 @@ kind sequence, so the AoE2 interleave survives any later reassignment.
 to 3–16. A second, whole-army term `cols ≈ sqrt(N·4)` keeps a mixed army wider
 than deep. (AoE2's "widest sub-formation widens the rest" rule alone gave a
 prototype army 3 tiles wide and 7 deep.) The frontage `W` is the larger of the
-two, or the player's dragged width. Each sub-formation then fills rows of
-`floor(W / pitch) + 1` units, in balanced rows (sizes differ by at most one,
-fuller rows in front), with a 2 u gap between sub-formations. The scenario
+two, or the player's dragged width. Each sub-formation then fills rows of up
+to `floor(W / pitch) + 1` units, with a 2 u gap between sub-formations. With
+the automatic width the rows are balanced (sizes differ by at most one, fuller
+rows in front). A dragged frontage fills each rank completely instead, so the
+front is as wide as the player drew it; balancing made it up to 40 % narrower.
+The scenario
 army (6 knights, 12 footmen, 10 pikemen, 12 archers, 2 catapults) comes out 29
 u wide and 23 u deep, as in the diagram in section 2.
 
@@ -294,33 +300,67 @@ A move order (`Formation.orderMove`) does the following:
    path to their slot and rejoin when they get within 8 u of it.
 3. **Facing.** The final heading is the direction of travel, unless the player
    dragged a front line (section 4.8).
-4. **Destination.** If many battle-layout slots would fall into obstacles,
-   `fitAnchor` searches rings of 4–36 u around the click for an anchor where
-   the formation fits.
+4. **Destination.** `fitAnchor` checks that a unit of each slot's kind could
+   stand on its slot at the clicked point. If any slot is blocked, it tries 16
+   points on each ring of 3–44 u around the click and takes the best, where
+   every blocked slot costs as much as 25 u of extra walking: a formation
+   squeezed between trees jams, so a clear spot a little further away is
+   better. (Our first version accepted up to 8 % blocked slots and tested every
+   slot with an infantryman's radius, which sent catapults into gaps they did
+   not fit.)
 5. **Path.** The anchor's A* path asks for a clearance of the largest unit's
    radius plus 2 u (at most the layout's half-width), so the formation doesn't
    squeeze through gaps only one unit wide, and falls back to the largest
    radius alone if no such route exists. Paths are string-pulled, corners are
    rounded (`SmoothPath`), and the result is parametrised by arc length.
-6. **Mode.** One of three:
+6. **Catapults pack up** at once. Waiting until the column reaches them meant
+   the whole column stopped for 2.4 s while they packed. On an attack-move, a
+   catapult with an enemy within its range plus 20 u stays deployed: it shoots
+   first, and packs up only once it has to move and has nothing to shoot.
+7. **Mode.** One of three:
 
 | Mode | When | What happens |
 |---|---|---|
-| `march` | path longer than 100 u and at least 4 members | Column layout. Slots are path-relative: each slot sits at `path(s + slot.y)` offset sideways by `slot.x`, so the column snakes along the path. Near the end, the formation deploys into the battle layout with synchronized arrival. |
-| `rigid` | already formed in the same layout and the path starts within 35° of the current facing | The formed block slides along the path, rotating at a rate its outer ranks can follow. Corners are rounded to `clamp(halfWidth, 6, 30)`. |
+| `march` | path longer than 100 u and at least 4 members | Column layout. Slots are path-relative: each slot sits at `path(s + slot.y)` offset sideways by `slot.x`, so the column snakes along the path. The column files out, bends when redirected, and deploys into the battle layout at the end (below). |
+| `rigid` | already formed in the same layout and the path starts within 35° of the current facing | The formed block slides along the path, rotating at a rate its outer ranks can follow, and not at all while it waits for a member. Corners are rounded to `clamp(halfWidth, 6, 30)`. |
 | `sync` | short moves, turns over 35°, re-forming, deploying | Each member goes straight to its slot at the destination (or paths there if it can't see it). Speeds are set so everyone arrives together (below). |
+
+**The marching column.** The column *files out*: its head starts level with
+the army's front, so the front ranks march off at once and the others fall in
+as the column passes them. A member whose column slot is still behind it waits
+where it stands until the slot is about to come past, then steps in. (A column
+centred on the army, our first version, made the front half walk backwards to
+their slots and started slowly.) The column *deploys* into the battle layout,
+with synchronized arrival, when its head reaches the front line of the
+formation at the destination; the rest of the column closes up behind. A
+marching column sent somewhere else *bends* from its head: the new path is the
+stretch of road the column is on, tail to head, followed by the route from the
+head to the new destination. Every member keeps its place and the column snakes
+round. Only a turn sharper than 125°, back on itself, builds a new column.
 
 **Synchronized arrival.** Each member's own travel time is `t_i = d_i / v_i`
 (plus pack-up time for a deployed catapult). The common duration is
 `T = min(max t_i, 1.5·median t_i + 0.5)`, so one far unit doesn't make everyone
 dawdle. Each member walks at `d_i / T`, but never slower than 35 % of its own
 speed; units whose own time exceeds `T` simply go at full speed. Thanks to CAPT,
-the straight paths don't cross. The formation becomes `idle` when 90 % of the
-members stand within 0.8 u of their slots, or `T + 4` seconds have passed.
+the straight paths don't cross. The formation is formed (`idle`) when every
+member stands within 0.8 u of its slot. A member that can't get there (blocked
+or shoved) holds things up only for a while: 90 % is enough 2 s after everyone
+should have arrived (the later of `T` and the slowest member's own time), and
+after 8 s the formation counts as formed anyway. (Declaring it formed at 90 %
+straight away left units still walking round trees after "arrival".)
 
 **End of a rigid move.** If the final facing differs from the walking
-direction by up to 50°, the block pivots in place; beyond that it re-forms with
-synchronized arrival.
+direction by up to 50°, the block pivots in place and then faces exactly the
+final heading; beyond that it re-forms with synchronized arrival. After the
+pivot the same rule applies: formed when everyone is in place, 90 % after 3 s,
+regardless after 10 s.
+
+**Idle.** Members pushed out of place walk back to their own slots. Only if
+one stays more than 3 u from its slot for 6 s (its slot can't be reached) is
+the formation laid out again where it stands, keeping everyone else's place.
+(Re-forming around the centroid every 2 s, as we first did, shifted the whole
+army and shuffled everyone whenever one unit was out of place.)
 
 ### 4.5 Anchor speed
 
@@ -336,6 +376,9 @@ v = v · clamp(1 − (lag − 4) / (14 − 4), 0, 1)                the group wa
   it made a column that started out of order crawl at a fifth of its speed;
   the regression test `keeps marching at full pace when units start ahead of
   their column slots` covers this.
+- A member whose slot is still behind it (waiting to fall in) isn't a laggard
+  either: the anchor has to keep going to bring the slot to it. Counting it
+  deadlocked a re-formed column for up to 18 s.
 - A catapult packing up counts as maximal lag, so the formation waits for it.
 - If the lag stays at the stop threshold for 6 s, the worst laggard becomes a
   straggler and stops holding everyone back.
@@ -348,21 +391,29 @@ Each tick, for each member under formation control:
 slotW   = rigid/battle: anchor + R(heading) · slot      march: path-relative slot
 slotVel = (slotW − previous slotW) / dt                 feed-forward
 v       = slotVel + 1.5 · (slotW − pos)                 offset pursuit with arrival
-if moving: drop any component of v that points backwards along the march
+while the anchor moves: drop any component of v pointing backwards along the march
 |v| ≤ catchUp · ownSpeed                                1.4, siege 1.2
 ```
 
-If the slot is more than 3 u away and not in line of sight, the member paths
-to it instead. Slots that land inside an obstacle are projected back towards
-the formation centre in 0.75 u steps (`projectSlot`), so the formation hugs a
+Once the anchor has stopped, stepping back into place is allowed. If the slot
+is more than 3 u away and not in line of sight, the member paths to it
+instead. Slots that land inside an obstacle are projected back towards the
+formation centre in 0.75 u steps (`projectSlot`), so the formation hugs a
 forest edge instead of pushing units into the trees.
+
+Member paths are planned for the unit's collision size (0.8 × radius), the
+same body the collision code moves; planning with a smaller one sent units
+along lines they could not walk. A member pushed off its planned line (by
+friends, or sliding along a trunk) plans again at once. A big unit may count
+a waypoint as reached early only if the next leg is clear, so a catapult no
+longer rams the tree the waypoint was leading it round.
 
 ### 4.7 Combat
 
 | Order | Behaviour |
 |---|---|
 | Move | Forced march: members ignore enemies, as in AoE2. |
-| Attack-move | The formation marches. Each member acquires targets on its own: archers at bow range, catapults at their range, melee units when an enemy is within 16 u (26 u once the formation has stopped). Members peel off while the rest keep marching. Once half the formation is fighting, the anchor stops and the formation becomes `engaged`. A column first deploys in place, so home points make sense. |
+| Attack-move | The formation marches. Each member acquires targets on its own: archers at bow range, catapults at their range, melee units when an enemy is within 16 u (26 u once the formation has stopped). Members peel off while the rest keep marching; a deployed catapult with a target in range shoots where it stands instead of packing up to follow. Once half the formation is fighting, the anchor stops and the formation becomes `engaged`. A column first deploys in place, so home points make sense. |
 | Attack unit | Members walk to the target and fight; the formation is `engaged`. |
 
 While engaged, slots are only **home points**. Stances set the leash:
@@ -376,16 +427,15 @@ While engaged, slots are only **home points**. Stances set the leash:
 
 Melee units prefer their counters (pikes look for knights, knights for archers
 and siege) and spread out: they avoid piling more than 3 attackers onto an
-infantry target, or more than 4 onto a knight or catapult. Archers focus wounded targets and skip units that arrows
-already in flight will kill. Catapults pick dense enemy clusters and avoid
+infantry target, or more than 4 onto a knight or catapult. Archers focus
+wounded targets and skip units that arrows already in flight will kill. Catapults pick dense enemy clusters and avoid
 targets next to friends.
 
 **Re-forming.** After 2 s with no enemy within any member's acquisition radius
 and nobody fighting, the formation re-forms on its survivors with synchronized
 arrival. If it was attack-moving and is still more than 8 u from its
-destination, it resumes the attack-move instead. An idle formation whose
-members were pushed out of place re-forms every 2 s, but only once everyone has
-stopped fighting.
+destination, it resumes the attack-move instead. Once it is idle, members
+walk back to their own slots (section 4.4).
 
 When members die, the layout is recomputed half a second later (debounced) with
 the stability bonus, so the survivors close ranks without reshuffling.
@@ -408,7 +458,11 @@ the stability bonus, so the survivors close ranks without reshuffling.
 Separation is a soft push between overlapping neighbours (radius sum + 0.4 u),
 weighted by relationship: 0.35 inside the same formation (members may pass
 through each other, as in AoE2 and 0 A.D.), 1 between friendly units of
-different groups, and 1.4 against enemies. Velocities are acceleration limited
+different groups, and 1.4 against enemies. Between friends who aren't
+fighting, a unit standing still yields to one on the move (Pottinger's
+priority rule): its push away from a walking friend is 2.5 times as strong,
+and the walker's push away from it 0.4 times, so a column walks through idle
+troops instead of stalling against them. Velocities are acceleration limited
 (knights 22 u/s², catapults 10, infantry 30) and integrated against the static
 grid with wall sliding.
 
@@ -431,7 +485,15 @@ Normal and fields 20 % more troops.
 | Member gain | 1.5 /s | `FORMATION.gain` |
 | Lag throttle start / stop | 4 u / 14 u | `FORMATION.lagStart`, `lagStop` |
 | Straggler timeout | 6 s at the stop threshold | `advanceAnchor` |
-| Settled distance / quorum | 0.8 u / 90 % | `FORMATION.settled`, `settledRatio` |
+| Settled distance | 0.8 u | `FORMATION.settled` |
+| Formed after synchronized arrival | everyone settled; 90 % after a 2 s grace; regardless after 8 s | `update` |
+| Formed after a rigid move | everyone settled; 90 % after 3 s; regardless after 10 s | `advanceAnchor` |
+| Idle re-layout | a member over 3 u from its slot for 6 s | `update` |
+| Column deploys | when its head reaches the destination's front line (at least 4 u before the end) | `advanceAnchor` |
+| Sharpest column bend | 125° | `bendColumn` |
+| Destination search | rings of 3–44 u, 25 u per blocked slot | `fitAnchor` |
+| Catapult stays deployed on attack-move | enemy within range + 20 u | `orderMove` |
+| Yield to a moving friend | push ×2.5 for the standing unit, ×0.4 for the walker | `World.move` |
 | Calm time before re-form | 2 s | `FORMATION.calmTime` |
 | Rigid move max initial turn | 35° | `FORMATION.rigidTurn` |
 | Pivot at the end of a move | up to 50° | `FORMATION.pivotTurn` |
@@ -446,7 +508,89 @@ Normal and fields 20 % more troops.
 | Re-layout stability bonus | 4 u² | `layoutAndAssign` |
 | Attack-move engage quorum | 50 % fighting | `checkContact` |
 
-## 6. Sources
+## 6. Testing: drills and the formation tester
+
+Formation movement goes wrong in ways that are hard to spot at normal speed: a
+unit that turns back, a column that pauses for a second, a block that squeezes
+into a gap it doesn't fit. Unit tests cover the layouts and the control law;
+whole manoeuvres are covered by **drills**, scripted orders on purpose-built
+practice fields, graded by measured checks.
+
+**Fields** (`src/tester/fields.ts`) are generated maps with hand-placed
+obstacles, so drills behave exactly as in a real battle. Most drills march
+from point A, on the left of the screen, to B on the right.
+
+| Field | Obstacles |
+|---|---|
+| Open ground | none |
+| Scattered woods | copses, boulders and single trees between A and B |
+| Narrow pass | a rocky ridge across the field with one gap, 20 u wide |
+| River ford | deep water down the middle with one shallow crossing |
+
+**Drills** (`src/tester/drills.ts`) set up an army, play a script (`act`,
+`mark`, `wait` and `until` with a timeout) and attach probes that sample the
+world every tick. There are 28, in six groups:
+
+| Group | Drills |
+|---|---|
+| Basics | form up from a crowd, advance in line, veer while advancing, wheel right, about face, change shape in place, turn round on the spot |
+| Marching | long march, change course mid-march, knights escorting catapults, march in a box, a large army (80 units), a handful of knights |
+| Terrain | through the woods, through the narrow pass, squeeze a line through the pass, cross the ford, short move into the woods, ordered into a copse |
+| Groups | a straggler far behind, losses on the march, two groups become one, detach the archers |
+| Orders | drag a front line, impatient orders (15 move orders in 6 s) |
+| Combat | attack-move through the enemy, break off and fall back, catapults keep shooting |
+
+**Probes** (`src/tester/drill.ts`) turn into pass/fail checks, each with a
+limit. They measure:
+
+- time between marks (time to arrive, to re-form, to contact);
+- the anchor's pace against the ideal 0.9 × slowest speed;
+- drift from slots while moving, and distance from slots at the end;
+- backwards walking, overlaps between friends, and units stuck behind an
+  obstacle for 5 s;
+- time spent inside trees, rocks or water;
+- the final facing and sub-formation order (knights in front, siege at the
+  back);
+- stragglers, slot swaps, detours and stillness at the end;
+- catapult time lost packing up with an enemy in range.
+
+`npm test` runs every drill headless (`tests/drills.test.ts`, about 7 s), and
+`bench/drills.sh` prints the report (`DRILL=march,pass` picks drills, `ALL=1`
+lists passing checks too). The formation tester page runs the same drills in a
+live battle with debug overlays; see the README.
+
+**What the drills found.** Writing them turned up these bugs, all fixed:
+
+- Shape hotkeys did nothing on a formed army, and a formation created by a
+  shape change was never laid out.
+- A dragged frontage came out about 40 % narrow (balanced rows).
+- A rigid block kept rotating while it waited for catapults to pack up,
+  throwing their slots 5 u away.
+- A long march started with the column centred on the army, so the front half
+  walked backwards to their slots.
+- The column stopped for 2.4 s when its catapults started packing mid-march.
+- Members waiting to fall into the column counted as laggards, which
+  deadlocked a re-formed column for up to 18 s.
+- A redirected column was rebuilt instead of bending, so everyone changed
+  places.
+- "Arrived" was declared at 90 % while units were still walking round trees.
+- An idle re-form around the centroid shifted the army and shuffled everyone.
+- A pivot stopped 1° short and snapped at the end, throwing a slot 10 u.
+- Units planned paths for a smaller body than the one that collides, slid off
+  their planned line along trunks, and never stepped back into place once the
+  anchor had stopped.
+- The destination search accepted blocked slots and tested every slot with an
+  infantryman's radius.
+- Rock sprites were drawn up to five times larger than their collision
+  circle.
+- Catapults rammed trees by cutting waypoints short.
+- Units standing still blocked comrades walking past them.
+- The order-time pack-up made catapults on an attack-move pack up with an
+  enemy already in range, then unpack again before their first shot (4.9 s
+  lost; they lost duels they used to win). The *catapults keep shooting* drill
+  guards this.
+
+## 7. Sources
 
 **AoE2 internals and history**
 - openage reverse-engineering notes: `doc/reverse_engineering/game_mechanics/formations.md`,

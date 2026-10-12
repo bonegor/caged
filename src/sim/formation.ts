@@ -24,6 +24,7 @@ import {
   type Slot,
 } from './formationLayout';
 import type { Unit } from './unit';
+import { UNIT_TYPES } from './unitTypes';
 
 export type FormationPhase = 'idle' | 'forming' | 'moving' | 'engaged';
 export type MoveMode = 'sync' | 'rigid' | 'march';
@@ -290,7 +291,16 @@ export class Formation {
     const formed = this.phase !== 'engaged' && this.isFormed() && this.layoutMode === 'battle' && this.sameLayout(battleSlots);
     const initialHeading = pathPts.length > 1 ? Math.atan2(pathPts[1].y - pathPts[0].y, pathPts[1].x - pathPts[0].x) : heading;
 
-    if (pathLen > 1) for (const u of this.members) host.packUp(u);
+    // Catapults pack up now rather than stopping the column when their turn to
+    // move comes. On an attack-move, one with an enemy in (or nearly in) range
+    // stays deployed: it shoots first and packs once it has to move.
+    if (pathLen > 1) {
+      for (const u of this.members) {
+        if (u.kind !== 'catapult' || !u.deployed) continue;
+        if (this.attackMove && host.enemyWithin(u, host.contactRadius(u) + 20)) continue;
+        host.packUp(u);
+      }
+    }
 
     if (pathLen > FORMATION.marchDistance && this.members.length >= 4 && column && this.bendColumn(host, column, anchor, maxRadius)) {
       // The column keeps its order and follows its head onto the new route.
@@ -839,37 +849,40 @@ export class Formation {
 }
 
 /**
- * If many slots of a layout would land in obstacles at `anchor`, look nearby
+ * If any slot of a layout would land in an obstacle at `anchor`, look nearby
  * for an anchor where the formation fits better (fewest blocked slots, then
  * the closest to the requested point).
  */
 export function fitAnchor(nav: NavGrid, slots: Slot[], anchor: Vec2, heading: number): Vec2 {
+  // A slot is blocked when a unit of its kind could not stand there.
   const blockedAt = (p: Vec2) => {
     let n = 0;
     for (const s of slots) {
       const w = slotToWorld({ pos: p, heading }, s);
-      if (!nav.passable(w.x, w.y, 1)) n++;
+      if (!nav.passable(w.x, w.y, UNIT_TYPES[s.kind].radius * 0.9)) n++;
     }
     return n;
   };
   let best = anchor;
   let bestBlocked = blockedAt(anchor);
-  if (bestBlocked <= slots.length * 0.08) return anchor;
-  let bestScore = bestBlocked * 10;
-  for (const r of [4, 8, 12, 18, 26, 36]) {
-    for (let k = 0; k < 12; k++) {
-      const a = (k / 12) * Math.PI * 2;
+  if (bestBlocked === 0) return anchor;
+  // Every blocked slot is worth 25 u of extra walking: a squeezed formation
+  // jams, so a clear spot a little further away is better.
+  let bestScore = bestBlocked * 25;
+  for (const r of [3, 6, 9, 12, 16, 20, 25, 30, 36, 44]) {
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * Math.PI * 2;
       const p = { x: anchor.x + Math.cos(a) * r, y: anchor.y + Math.sin(a) * r };
       if (!nav.passable(p.x, p.y, 2)) continue;
       const b = blockedAt(p);
-      const score = b * 10 + r * 0.6;
+      const score = b * 25 + r;
       if (score < bestScore) {
         bestScore = score;
         bestBlocked = b;
         best = p;
       }
     }
-    if (bestBlocked === 0) break;
+    if (bestBlocked === 0 && r >= bestScore) break;
   }
   return best;
 }
@@ -899,7 +912,10 @@ export function projectSlot(nav: NavGrid, raw: Vec2, centre: Vec2, radius: numbe
 /** Points a unit's path at `goal`, re-pathing at most every `every` seconds or when the goal moved. */
 export function setPathGoal(u: Unit, goal: Vec2, host: FormationHost, every: number): void {
   const moved = !u.pathGoal || dist(u.pathGoal, goal) > 2;
-  if (moved || host.time >= u.repathAt || !u.path.length) {
+  // Pushed off the planned line (by friends or by sliding along a trunk), the
+  // way to the next waypoint may be blocked: plan again from here.
+  const offTrack = u.path.length > 0 && !host.nav.lineClear(u.pos, u.path[0], u.radius * 0.8);
+  if (moved || offTrack || host.time >= u.repathAt || !u.path.length) {
     if (host.nav.lineClear(u.pos, goal, u.radius * 0.8)) {
       u.path = [{ ...goal }];
     } else {
@@ -912,12 +928,19 @@ export function setPathGoal(u: Unit, goal: Vec2, host: FormationHost, every: num
   } else if (u.path.length) {
     u.path[u.path.length - 1] = { ...goal };
   }
-  followPath(u, u.speed);
+  followPath(u, u.speed, host.nav);
 }
 
 /** Steers along u.path at the given speed (arrival slow-down on the last leg). */
-export function followPath(u: Unit, speed: number): void {
-  while (u.path.length > 1 && dist(u.pos, u.path[0]) < Math.max(1.2, u.radius)) u.path.shift();
+export function followPath(u: Unit, speed: number, nav?: NavGrid): void {
+  while (u.path.length > 1) {
+    // A waypoint counts as reached when close; a big unit may cut it short
+    // only if the next leg is actually open (else it rams the obstacle the
+    // waypoint was leading it round).
+    const d = dist(u.pos, u.path[0]);
+    if (d < 1.2 || (d < u.radius && (!nav || nav.lineClear(u.pos, u.path[1], u.radius * 0.8)))) u.path.shift();
+    else break;
+  }
   const wp = u.path[0];
   if (!wp) {
     u.desired = { x: 0, y: 0 };

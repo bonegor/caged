@@ -1,4 +1,4 @@
-// Prints every drill check (pass/fail with values). DRILL=id runs one drill.
+// Prints every drill check (pass/fail with values). DRILL=id,id picks drills; ALL=1 lists passing checks too.
 import { it } from 'vitest';
 import fs from 'node:fs';
 import { DRILLS } from '../src/tester/drills';

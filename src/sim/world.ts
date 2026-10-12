@@ -105,6 +105,8 @@ export class World implements FormationHost {
     const p = this.nav.nearestPassable(pos, UNIT_TYPES[kind].radius, 30) ?? pos;
     const u = new Unit(this.nextUnitId++, team, kind, p, facing);
     this.units.push(u);
+    // Visible to neighbour queries at once (orders can come before the first step).
+    this.hash.insert(u);
     return u;
   }
 
@@ -425,8 +427,18 @@ export class World implements FormationHost {
     if (u.formation) {
       if (u.memberFlag === 'engaged') u.memberFlag = 'returning';
       this.catapultAutoState(u);
-      // Desired velocity was set by the formation this tick.
-      if (u.kind === 'catapult' && u.deployed && Math.hypot(u.desired.x, u.desired.y) > 1.2) this.startSetup(u, 'pack');
+      // Desired velocity was set by the formation this tick. A deployed
+      // catapult it pulls along packs up, but on an attack-move it first
+      // shoots at anything in range (without waiting for its next scan).
+      if (u.kind === 'catapult' && u.deployed && Math.hypot(u.desired.x, u.desired.y) > 1.2) {
+        const t = this.canAutoAcquire(u) ? this.findTarget(u, this.contactRadius(u)) : null;
+        if (t) {
+          this.engage(u, t, false);
+          this.combatSteer(u);
+        } else {
+          this.startSetup(u, 'pack');
+        }
+      }
       return;
     }
 
@@ -550,7 +562,7 @@ export class World implements FormationHost {
       u.desired = { x: (dx / l) * u.speedCap, y: (dy / l) * u.speedCap };
     } else {
       setPathGoal(u, goal, this, 1);
-      followPath(u, u.speedCap);
+      followPath(u, u.speedCap, this.nav);
     }
   }
 
@@ -743,8 +755,11 @@ export class World implements FormationHost {
       const wantSpeed = Math.hypot(dx, dy);
 
       // Separation from neighbours (soft inside a formation, firm otherwise).
+      // A friend standing still steps aside for a friend on the move
+      // (Pottinger: the lower-priority unit gets out of the way).
       let sx = 0;
       let sy = 0;
+      const idle = wantSpeed < 0.3;
       this.hash.forEachNear(u.pos.x, u.pos.y, u.radius + 4, (o) => {
         if (o === u || !o.alive) return;
         const ox = u.pos.x - o.pos.x;
@@ -755,6 +770,11 @@ export class World implements FormationHost {
         let w = 1;
         if (u.formation && u.formation === o.formation) w = 0.35;
         if (o.team !== u.team) w = 1.4;
+        else if (!u.target && !o.target) {
+          const otherMoving = Math.hypot(o.desired.x, o.desired.y) > 1;
+          if (idle && otherMoving) w *= 2.5;
+          else if (!idle && Math.hypot(o.desired.x, o.desired.y) < 0.3) w *= 0.4;
+        }
         const push = ((minD + 0.4 - d) / (minD + 0.4)) * w;
         sx += (ox / d) * push;
         sy += (oy / d) * push;

@@ -1003,3 +1003,235 @@ input[type='range'] {
     width: 280px;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Formation tester */
+
+.tester-panel {
+  position: absolute;
+  top: 52px;
+  right: 10px;
+  bottom: 186px;
+  width: 372px;
+  display: flex;
+  flex-direction: column;
+  background: rgba(18, 14, 9, 0.96);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  z-index: 3;
+}
+.tester-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.tester-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.tester-tabs {
+  display: flex;
+  gap: 6px;
+}
+.tester-tabs .chip {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+.tester-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tester-body p {
+  margin: 2px 0;
+  line-height: 1.3;
+}
+.tester-group {
+  font-family: var(--display);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--gold);
+  margin-top: 8px;
+}
+.drill {
+  border: 1px solid rgba(92, 70, 34, 0.55);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.025);
+}
+.drill-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 8px;
+  cursor: pointer;
+}
+.drill-line .btn.small {
+  padding: 4px 9px;
+  font-size: 11px;
+}
+.tester-body .btn.small {
+  white-space: nowrap;
+}
+.drill-name {
+  font-size: 15px;
+}
+.drill .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex: none;
+  background: #5b5240;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+.drill.pass .dot {
+  background: var(--good);
+}
+.drill.fail .dot {
+  background: var(--bad);
+}
+.drill.running .dot {
+  background: var(--gold-hi);
+  animation: tester-pulse 0.9s ease-in-out infinite alternate;
+}
+@keyframes tester-pulse {
+  to {
+    opacity: 0.35;
+  }
+}
+.drill.open {
+  border-color: var(--gold-dim);
+}
+.drill-details {
+  padding: 2px 10px 8px;
+  font-size: 14px;
+  color: var(--text);
+}
+.drill-details .bad,
+.checks tr.bad td {
+  color: var(--bad);
+}
+.checks {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: 4px;
+}
+.checks td {
+  padding: 2px 3px;
+  border-bottom: 1px solid rgba(92, 70, 34, 0.3);
+  vertical-align: top;
+}
+.checks tr.ok td:first-child {
+  color: var(--good);
+}
+.checks td.num {
+  text-align: right;
+  white-space: nowrap;
+}
+.checks td.muted {
+  color: var(--muted);
+}
+.mini-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+}
+.mini-row .grow {
+  flex: 1;
+}
+.mini-row .n {
+  min-width: 26px;
+  text-align: center;
+  font-family: var(--display);
+  font-weight: 700;
+}
+.portrait.mini {
+  width: 30px;
+  height: 30px;
+}
+button.tiny {
+  width: 24px;
+  height: 24px;
+  border-radius: 3px;
+  border: 1px solid var(--gold-dim);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--gold-hi);
+  cursor: pointer;
+  line-height: 1;
+}
+label.toggle {
+  display: grid;
+  grid-template-columns: 18px auto;
+  column-gap: 8px;
+  align-items: center;
+  font-size: 15px;
+  cursor: pointer;
+}
+label.toggle input {
+  accent-color: var(--gold);
+  margin: 0;
+}
+label.toggle .small {
+  grid-column: 2;
+}
+.tester-inspector {
+  border-top: 1px solid var(--line);
+  padding: 8px 12px 10px;
+  min-height: 54px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: rgba(0, 0, 0, 0.25);
+}
+.inspector-title {
+  font-family: var(--display);
+  color: var(--gold-hi);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+}
+.hud-middle {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+}
+.hud-middle > .row {
+  min-width: 0;
+}
+.tester-fields {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+.tester-fields .hud-btn {
+  white-space: nowrap;
+}
+.tester-status {
+  font-family: var(--body);
+  font-size: 14px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+@media (max-width: 1400px) {
+  .tester-status {
+    display: none;
+  }
+  .hud-top .hud-btn {
+    padding: 6px 8px;
+  }
+}

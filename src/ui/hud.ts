@@ -25,6 +25,14 @@ const STANCES: { stance: Unit['stance']; icon: IconName; key: string; name: stri
   { stance: 'noAttack', icon: 'noAttack', key: 'V', name: 'No Attack', tip: 'Hold fire. Useful to slip past the enemy.' },
 ];
 
+/** Formation tester variant: its own controls in the top bar, finer speed steps, no strength bars. */
+export interface HudTesterOptions {
+  title: string;
+  /** Extra controls placed in the middle of the top bar. */
+  middle: HTMLElement;
+  onStep(): void;
+}
+
 export interface HudCallbacks {
   onResume(): void;
   onRestart(): void;
@@ -54,10 +62,12 @@ export class Hud {
   private slowTimer = 0;
   private toastTimer = 0;
   private startHp: [number, number];
+  private speeds: number[];
 
   constructor(
     private battle: Battle,
     private cb: HudCallbacks,
+    private tester?: HudTesterOptions,
   ) {
     const cfg = battle.config;
     const colors = [hex(cfg.player.color), hex(cfg.enemy.color)];
@@ -67,8 +77,9 @@ export class Hud {
     this.counts[1].style.color = colors[1];
 
     this.pauseBtn = h('button', { class: 'hud-btn', onclick: () => this.togglePause() }, 'Pause');
-    const speeds = [1, 1.5, 2.5];
-    this.speedBtns = speeds.map((s) =>
+    this.speeds = tester ? [0.25, 0.5, 1, 2, 4] : [1, 1.5, 2.5];
+    const label = (s: number) => (s === 0.25 ? '¼×' : s === 0.5 ? '½×' : `${s}×`);
+    this.speedBtns = this.speeds.map((s) =>
       h(
         'button',
         {
@@ -76,20 +87,33 @@ export class Hud {
           onclick: () => this.setSpeed(s),
           title: 'Game speed (+ / −)',
         },
-        `${s}×`,
+        label(s),
       ),
     );
-    const top = h(
-      'div',
-      { class: 'hud-top' },
-      h('span', { class: 'title' }, cfg.scenario.name),
-      this.clock,
-      h('div', { class: 'strength' }, this.counts[0], this.bars, this.counts[1]),
-      ...this.speedBtns,
-      this.pauseBtn,
-      h('button', { class: 'hud-btn', onclick: () => cb.onHelp() }, 'Help'),
-      h('button', { class: 'hud-btn', onclick: () => this.showPause() }, 'Menu'),
-    );
+    const top = tester
+      ? h(
+          'div',
+          { class: 'hud-top' },
+          h('span', { class: 'title' }, tester.title),
+          this.clock,
+          h('div', { class: 'hud-middle' }, tester.middle),
+          ...this.speedBtns,
+          this.pauseBtn,
+          h('button', { class: 'hud-btn', title: 'Advance one tick (1/30 s) while paused', onclick: () => tester.onStep() }, 'Step'),
+          h('button', { class: 'hud-btn', onclick: () => cb.onHelp() }, 'Help'),
+          h('button', { class: 'hud-btn', onclick: () => cb.onQuit() }, 'Menu'),
+        )
+      : h(
+          'div',
+          { class: 'hud-top' },
+          h('span', { class: 'title' }, cfg.scenario.name),
+          this.clock,
+          h('div', { class: 'strength' }, this.counts[0], this.bars, this.counts[1]),
+          ...this.speedBtns,
+          this.pauseBtn,
+          h('button', { class: 'hud-btn', onclick: () => cb.onHelp() }, 'Help'),
+          h('button', { class: 'hud-btn', onclick: () => this.showPause() }, 'Menu'),
+        );
 
     const mmWrap = h('div', { class: 'minimap-wrap' }, this.minimap.canvas);
     let dragging = false;
@@ -165,14 +189,13 @@ export class Hud {
     this.tooltip.style.transform = 'translateY(-100%)';
   }
 
-  private setSpeed(s: number): void {
+  setSpeed(s: number): void {
     this.battle.speed = s;
-    const speeds = [1, 1.5, 2.5];
-    this.speedBtns.forEach((b, i) => b.classList.toggle('on', speeds[i] === s));
+    this.speedBtns.forEach((b, i) => b.classList.toggle('on', this.speeds[i] === s));
   }
 
   changeSpeed(delta: number): void {
-    const speeds = [1, 1.5, 2.5];
+    const speeds = this.speeds;
     const i = Math.max(0, Math.min(speeds.length - 1, speeds.indexOf(this.battle.speed) + delta));
     this.setSpeed(speeds[i] ?? 1);
     this.toast(`Speed ${speeds[i]}×`);
@@ -306,7 +329,15 @@ export class Hud {
     this.slowTimer = 0.12;
 
     const t = Math.floor(b.world.time);
-    this.clock.textContent = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+    this.clock.textContent = this.tester
+      ? `${b.world.time.toFixed(1)} s`
+      : `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+    if (this.tester) {
+      this.minimap.draw(b.world, b.renderer.camera, new Set(b.input.selection.map((u) => u.id)));
+      if (this.selDirty) this.refreshSelection();
+      else this.refreshCommandStates();
+      return;
+    }
     const hp = [0, 1].map((team) => b.world.units.filter((u) => u.alive && u.team === team).reduce((s, u) => s + u.hp, 0));
     const n = [0, 1].map((team) => b.world.units.filter((u) => u.alive && u.team === team).length);
     const total = hp[0] + hp[1] || 1;

@@ -12,6 +12,7 @@ import { Camera } from './camera';
 import { Effects } from './effects';
 import { KZ, toScreenX, toScreenY } from './iso';
 import { Terrain } from './terrain';
+import { DebugOverlay } from './debugOverlay';
 import type { TextureSource } from 'pixi.js';
 import { angleDiff } from '../sim/math';
 import { settings } from '../settings';
@@ -58,6 +59,11 @@ export class GameRenderer {
   private effectLayer = new Container();
   private ghostLayer = new Container();
   readonly overlay = new Graphics();
+  /** Formation debug drawing (tester): ground layer in world space, labels in screen space. */
+  private debugGround = new Graphics();
+  private debugTop = new Graphics();
+  readonly debugUi = new Container();
+  private debugOverlay: DebugOverlay | null = null;
   private views = new Map<number, UnitView>();
   private statics: StaticView[] = [];
   private occluders: StaticView[] = [];
@@ -86,10 +92,12 @@ export class GameRenderer {
       this.decalLayer,
       this.shadowLayer,
       this.groundUi,
+      this.debugGround,
       this.objectLayer,
       this.projectileGfx,
       this.effectLayer,
       this.ghostLayer,
+      this.debugTop,
     );
     this.effects = new Effects(this.effectLayer, this.decalLayer);
     this.buildScenery();
@@ -113,9 +121,16 @@ export class GameRenderer {
     return data.shadow(st.start + (variant % st.frames));
   }
 
-  private placeStatic(set: string, x: number, y: number, variant: number, scale: number, occluder: boolean, r: number, zBias = 0): void {
+  /**
+   * `scale` is either a sprite scale, or (fit) the radius in u the sprite should
+   * cover: rock variants differ a lot in size, and a rock must look as big as
+   * the ground it blocks.
+   */
+  private placeStatic(set: string, x: number, y: number, variant: number, scaleOrFit: number | { fit: number }, occluder: boolean, r: number, zBias = 0): void {
     const f = this.envFrame(set, variant);
     if (!f) return;
+    // A ground circle of radius r is 2 * 16 * r pixels wide on screen at scale 1.
+    const scale = typeof scaleOrFit === 'number' ? scaleOrFit : scaleOrFit.fit / (f.tex.frame.width / 32);
     const sx = toScreenX(x, y);
     const sy = toScreenY(x, y);
     const sprite = new Sprite(f.tex);
@@ -140,12 +155,12 @@ export class GameRenderer {
   private buildScenery(): void {
     for (const o of this.map.obstacles) {
       if (o.kind === 'tree') this.placeStatic('env_trees', o.x, o.y, o.variant, 0.85 + (o.r - 1.6) * 0.3, true, o.r);
-      else this.placeStatic('env_rocks', o.x, o.y, o.variant, Math.max(1.1, o.r / 0.8), false, o.r);
+      else this.placeStatic('env_rocks', o.x, o.y, o.variant, { fit: o.r * 1.15 }, false, o.r);
     }
     for (const d of this.map.decor) {
       if (d.kind === 'bush') this.placeStatic('env_bushes', d.x, d.y, d.variant, 0.8, false, 1, -2);
       else if (d.kind === 'grass') this.placeStatic('env_grass', d.x, d.y, d.variant, 0.62, false, 0.5, -4);
-      else this.placeStatic('env_rocks', d.x, d.y, d.variant, 0.6, false, 0.5, -3);
+      else this.placeStatic('env_rocks', d.x, d.y, d.variant, { fit: 0.55 }, false, 0.5, -3);
     }
   }
 
@@ -427,12 +442,27 @@ export class GameRenderer {
     this.camera.resize(w, h);
   }
 
+  /** Formation debug overlay (created on first use). */
+  get debug(): DebugOverlay {
+    if (!this.debugOverlay) this.debugOverlay = new DebugOverlay(this.debugGround, this.debugTop, this.debugUi);
+    return this.debugOverlay;
+  }
+
+  /** Turns the debug overlay off and clears it. */
+  hideDebug(): void {
+    this.debugOverlay?.reset();
+    this.debugOverlay = null;
+    this.debugGround.clear();
+    this.debugTop.clear();
+  }
+
   update(alpha: number, dt: number): void {
     this.time += dt;
     this.camera.apply(this.root);
     this.terrain.update(this.time);
     this.updateUnits(alpha);
     this.drawGroundUi(dt);
+    this.debugOverlay?.draw(this.world, this.camera, this.teams.map((t) => rgbToHex(t.color)));
     this.drawProjectiles(alpha);
     this.effects.update(dt);
     this.drawOverlay();

@@ -72,13 +72,13 @@ export const FIELDS: Record<FieldId, Field> = {
   pass: {
     id: 'pass',
     name: 'Narrow pass',
-    blurb: 'A thick hedge splits the field; one gap, 16 u wide, in the middle.',
+    blurb: 'A rocky ridge splits the field; one gap, 20 u wide, in the middle.',
     seed: 503,
     spec: {
       ...base,
-      dryness: 0.35,
+      dryness: 0.45,
       forests: [],
-      walls: [{ from: frac(8, 8), to: frac(352, 352), kind: 'tree', spacing: 3.2, rows: 3, gaps: [{ at: 0.5, half: 8 }] }],
+      walls: [{ from: frac(8, 8), to: frac(352, 352), kind: 'rock', spacing: 3.4, rows: 2, gaps: [{ at: 0.5, half: 10 }] }],
     },
   },
   ford: {

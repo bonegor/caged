@@ -31,6 +31,7 @@ import {
   stillness,
   stragglers,
   stuck,
+  total,
   until,
   wait,
   DRILL_GROUPS,
@@ -44,7 +45,7 @@ const BIG: Composition = { knight: 12, footman: 24, pikeman: 20, archer: 20, cat
 const WEST = EAST + Math.PI;
 const SOUTH = EAST + Math.PI / 2; // to the right of an army facing east
 const NORTH = EAST - Math.PI / 2;
-/** Centre of the practice fields (the gap in the hedge, the ford, a copse in the woods). */
+/** Centre of the practice fields (the gap in the ridge, the ford, a copse in the woods). */
 const MID: Vec2 = { x: 180, y: 180 };
 
 /** Slowest walking speed in a composition. */
@@ -56,10 +57,16 @@ const ideal = (c: Composition, d: number) => d / (0.9 * slowest(c));
 const side = (p: Vec2) => p.x - p.y;
 const onFarSide = (r: DrillRun) => r.alive.filter((u) => side(u.pos) <= 4).length;
 
+/** `u` could shoot `e` from where it stands (between minimum and maximum range). */
+function inRange(u: Unit, e: Unit): boolean {
+  const d = dist(u.pos, e.pos) - u.radius - e.radius;
+  return d <= u.type.attack.range && d >= u.type.attack.minRange;
+}
+
 /** Waits for the freshly spawned army to stand formed, then a moment more. */
 const ready = [until('Army forms up', formed, 15, 'ready'), wait(1)];
 
-const common = () => [insideObstacles('Never inside trees, rocks or water'), stuck('Nobody stuck behind an obstacle', 'order', 'done')];
+const common = () => [insideObstacles('Never inside trees, rocks or water'), stuck('Nobody stuck behind an obstacle', 'order')];
 
 /** Mean nearest-neighbour distance among members (a spacing measure). */
 function spacing(units: Unit[]): number {
@@ -292,7 +299,7 @@ const ALL: Drill[] = [
     id: 'pass',
     group: 'Terrain',
     name: 'Through a narrow pass',
-    summary: 'March through a 16 u gap in a hedge to a point 200 u away. The column threads the gap and deploys beyond.',
+    summary: 'March through a 20 u gap in a rocky ridge to a point 200 u away. The column threads the gap and deploys beyond.',
     field: 'pass',
     setup: (r) => r.spawnFormed(ARMY, A, EAST),
     steps: [
@@ -315,7 +322,7 @@ const ALL: Drill[] = [
     id: 'pass-short',
     group: 'Terrain',
     name: 'Squeeze through the pass',
-    summary: 'A short move (90 u) through the same 16 u gap with a 29 u wide line. The block must narrow down, pass and widen again.',
+    summary: 'A short move (90 u) through the same 20 u gap with a 29 u wide line. The block must narrow down, pass and widen again.',
     field: 'pass',
     setup: (r) => r.spawnFormed(ARMY, ahead({ x: 180, y: 180 }, EAST, -45), EAST),
     steps: [
@@ -620,6 +627,36 @@ const ALL: Drill[] = [
       duration('Time to re-form behind', 'order', 'arrived', 40),
       atEnd('Still fighting at the end', 'max', 0, 'units', (rr) => rr.alive.filter((u) => u.target).length),
       finalShape('Distance from slot', 0.6, 2),
+      insideObstacles('Never inside obstacles'),
+    ],
+  },
+  {
+    id: 'siege-fire',
+    group: 'Combat',
+    name: 'Catapults keep shooting',
+    summary: 'Attack-move towards an enemy already in catapult range: the catapults open fire where they stand instead of packing up, while the infantry advances.',
+    field: 'open',
+    setup: (r) => {
+      // Holding fire until the order, so every catapult is loaded when it comes.
+      r.world.setStance(r.spawnFormed({ footman: 12, pikeman: 10, catapult: 4 }, A, EAST), 'noAttack');
+      const foes = r.spawnFormed({ footman: 12 }, ahead(A, EAST, 70), WEST, 'line', 1);
+      r.world.setStance(foes, 'standGround');
+    },
+    steps: [
+      ...ready,
+      mark('order'),
+      act('Attack-move into the enemy', (r) => {
+        r.world.setStance(r.alive, 'aggressive');
+        r.move(ahead(A, EAST, 70), { attackMove: true });
+      }),
+      until('First stone', (r) => r.alive.some((u) => u.kind === 'catapult' && u.attackTime >= 0), 10, 'fire'),
+      until('Infantry reaches the enemy', (r) => r.alive.some((u) => !u.isRanged && !!u.target && dist(u.pos, u.target.pos) < 6), 30, 'contact'),
+    ],
+    probes: () => [
+      duration('Time to the first stone', 'order', 'fire', 1),
+      total('Catapult time lost packing with an enemy in range', 'order', 'contact', 0.5, 'unit-s', (r) =>
+        r.alive.filter((u) => u.kind === 'catapult' && (!u.deployed || u.busySetup) && r.enemies.some((e) => e.alive && inRange(u, e))).length,
+      ),
       insideObstacles('Never inside obstacles'),
     ],
   },

@@ -11,6 +11,8 @@ import { clear, h } from './ui/dom';
 import type { FormationShape } from './sim/formationLayout';
 import { settings } from './settings';
 import { audio } from './audio/audio';
+import { FormationTester } from './ui/tester';
+import type { FieldId } from './tester/fields';
 
 const noopCallbacks: InputCallbacks = {
   onSelectionChanged() {},
@@ -29,6 +31,7 @@ export class App {
   private overlay: HTMLElement | null = null;
   private last: { config: BattleConfig; shape: FormationShape } | null = null;
   private attractBusy = false;
+  private tester: FormationTester | null = null;
 
   constructor(
     readonly app: Application,
@@ -77,6 +80,7 @@ export class App {
       mainMenu({
         onPlay: () => this.scenarioSelect(),
         onQuick: () => this.quickBattle(),
+        onTester: () => void this.formationTester(),
         onHelp: () => this.showOverlay(helpModal(() => this.closeOverlay())),
         onSettings: () => this.showOverlay(settingsModal(() => this.closeOverlay(), () => audio.applyVolumes())),
         onCredits: () => this.showOverlay(creditsModal(() => this.closeOverlay())),
@@ -116,6 +120,20 @@ export class App {
       },
       'line',
     );
+  }
+
+  /** The formation tester: drills, sandbox and debug overlays. */
+  async formationTester(opts: { drill?: string; field?: FieldId; runAll?: boolean } = {}): Promise<void> {
+    this.stopAttract();
+    this.endBattle();
+    this.screen?.remove();
+    this.screen = null;
+    const tester = new FormationTester(this.app, this.ui, {
+      onQuit: () => void this.mainMenu(),
+      onHelp: () => this.showOverlay(helpModal(() => this.closeOverlay())),
+    });
+    this.tester = tester;
+    await tester.open(opts);
   }
 
   // ---------------------------------------------------------------------------
@@ -244,6 +262,10 @@ export class App {
   }
 
   private endBattle(): void {
+    if (this.tester) {
+      this.tester.destroy();
+      this.tester = null;
+    }
     if (this.battle) {
       this.battle.destroy();
       this.battle = null;

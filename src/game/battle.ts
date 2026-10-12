@@ -46,7 +46,8 @@ export class Battle {
   readonly world: World;
   readonly renderer: GameRenderer;
   readonly input: Input;
-  readonly ai: AIController;
+  /** The computer opponent (none in the formation tester's sandbox). */
+  readonly ai: AIController | null;
   readonly spectator: boolean;
   paused = false;
   speed = 1;
@@ -65,13 +66,14 @@ export class Battle {
     renderer: GameRenderer,
     callbacks: InputCallbacks,
     spectator: boolean,
+    sandbox: boolean,
   ) {
     this.world = world;
     this.renderer = renderer;
     this.spectator = spectator;
     this.input = new Input(app.canvas, world, renderer, callbacks, 0, spectator);
-    this.ai = new AIController(1, config.difficulty, config.scenario.enemyPlan ?? 'attack');
-    world.controllers.push(this.ai);
+    this.ai = sandbox ? null : new AIController(1, config.difficulty, config.scenario.enemyPlan ?? 'attack');
+    if (this.ai) world.controllers.push(this.ai);
     if (spectator) world.controllers.push(new AIController(0, config.difficulty, 'attack'));
     for (const team of [0, 1]) {
       const army = team === 0 ? config.player.army : config.enemy.army;
@@ -85,12 +87,18 @@ export class Battle {
     config: BattleConfig,
     callbacks: InputCallbacks,
     onProgress?: (f: number, label: string) => void,
-    opts: { spectator?: boolean; shape?: FormationShape } = {},
+    opts: {
+      spectator?: boolean;
+      shape?: FormationShape;
+      /** Formation tester: no AI, no victory, world seeded like the headless drills. */
+      sandbox?: { worldSeed: number };
+    } = {},
   ): Promise<Battle> {
     onProgress?.(0.02, 'Shaping the land');
     await new Promise((r) => setTimeout(r, 16));
     const map = generateMap(config.scenario.map, config.scenario.seed);
-    const world = new World(map, config.scenario.seed ^ 0x5eed);
+    const world = new World(map, opts.sandbox ? opts.sandbox.worldSeed : config.scenario.seed ^ 0x5eed);
+    if (opts.sandbox) world.endless = true;
     const sets = [
       ...new Set([
         ...Object.values(FACTIONS[config.player.faction].sprites),
@@ -129,12 +137,13 @@ export class Battle {
     });
     renderer.camera.zoom = renderer.camera.targetZoom = 0.8;
     onProgress?.(1, 'Ready');
-    return new Battle(app, config, map, world, renderer, callbacks, !!opts.spectator);
+    return new Battle(app, config, map, world, renderer, callbacks, !!opts.spectator, !!opts.sandbox);
   }
 
   start(): void {
     this.app.stage.addChildAt(this.renderer.root, 0);
     this.app.stage.addChild(this.renderer.overlay);
+    this.app.stage.addChild(this.renderer.debugUi);
     this.app.ticker.add(this.tickerFn);
   }
 
@@ -143,6 +152,20 @@ export class Battle {
     this.input.dispose();
     this.renderer.root.destroy({ children: true });
     this.renderer.overlay.destroy();
+    this.renderer.debugUi.destroy({ children: true });
+  }
+
+  /** Advances the simulation by `ticks` fixed steps (single-stepping while paused). */
+  step(ticks = 1): void {
+    for (let i = 0; i < ticks; i++) this.tick();
+    this.input.pruneSelection();
+  }
+
+  private tick(): void {
+    this.world.step(TICK);
+    this.renderer.consumeEvents();
+    this.onWorldEvents?.(this.world.events);
+    this.world.events = [];
   }
 
   private frame(realDt: number): void {
@@ -151,10 +174,7 @@ export class Battle {
       this.acc += dt * this.speed;
       let steps = 0;
       while (this.acc >= TICK && steps < 8) {
-        this.world.step(TICK);
-        this.renderer.consumeEvents();
-        this.onWorldEvents?.(this.world.events);
-        this.world.events = [];
+        this.tick();
         this.acc -= TICK;
         steps++;
       }

@@ -1,6 +1,7 @@
 import { Application } from 'pixi.js';
 import './ui/style.css';
 import { App } from './app';
+import type { FieldId } from './tester/fields';
 
 async function boot(): Promise<void> {
   const app = new Application();
@@ -18,10 +19,18 @@ async function boot(): Promise<void> {
   // Handy for debugging from the console.
   (window as unknown as { __game: App; __app: Application }).__game = game;
   (window as unknown as { __app: Application }).__app = app;
-  // ?battle=<scenario id> jumps straight into a battle (handy for testing and sharing).
-  const direct = new URLSearchParams(location.search).get('battle');
+  // ?battle=<scenario id> jumps straight into a battle (handy for testing and sharing);
+  // ?tester[=<drill id>][&field=<field>][&all] opens the formation tester.
+  const params = new URLSearchParams(location.search);
+  const direct = params.get('battle');
   if (direct) await game.quickBattle(direct);
-  else await game.mainMenu();
+  else if (params.has('tester')) {
+    await game.formationTester({
+      drill: params.get('tester') || undefined,
+      field: (params.get('field') as FieldId | null) ?? undefined,
+      runAll: params.has('all'),
+    });
+  } else await game.mainMenu();
 }
 
 boot().catch((e) => {

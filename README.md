@@ -29,6 +29,10 @@ formations, and every unit type has bonus damage against the types it counters.
   starting formation, the enemy's faction and the difficulty.
 - **A computer opponent** that holds a battle line, screens its archers and
   sends its knights around your flank after exposed archers and catapults.
+- **A formation tester.** 28 scripted drills (marches, turns, a narrow pass, a
+  ford, merges, casualties, attack-moves) with measured pass/fail checks, a
+  sandbox for spawning armies and enemies, debug overlays for slots, paths and
+  trails, and slow motion down to single ticks.
 - **Art and sound from 0 A.D.** The units were rendered from 0 A.D.'s 3D models
   and animations into isometric sprites, with team colours, 16 facing
   directions and death animations. Terrain, trees, sounds, unit voices and
@@ -128,6 +132,39 @@ Difficulty changes both the opponent's skill and its army:
 | Normal | 100 % | A separate cavalry wing hunts exposed archers and siege, swings around your flank and pulls back from pikes |
 | Hard | 120 % | As Normal, reacting twice as fast |
 
+## Formation tester
+
+**Formation Tester** on the main menu (or `?tester` in the URL) opens a
+practice battlefield with no opponent, for watching formation movement and
+checking it.
+
+![The formation tester: a line squeezing through the narrow pass](docs/images/formation-tester.webp)
+
+- **Drills.** 28 scripted manoeuvres in six groups: basics, marching, terrain,
+  groups, orders and combat. **Watch** plays one on the battlefield with the
+  camera following the army; click a drill to see what it does and, once it
+  has run, its checks with their limits. **Run all** runs every drill at full
+  speed and marks each one passed or failed.
+- **Sandbox.** Choose a mix of units and spawn it as a formation (in any shape)
+  or as a crowd in the middle of the view. Enemies can be spawned too; they
+  hold their ground and fight back. Your units take the usual orders.
+- **Overlays** (View tab): slots coloured by sub-formation, a line from each
+  unit to its slot (green in place, yellow within 3 u, red further), the
+  anchor with its path and destination, trails, velocities and a label per
+  formation.
+- **Time controls**: ¼× to 4× speed, pause, and **Step** (or `.` while paused)
+  to advance one tick.
+- **Fields**: open ground, scattered woods, a narrow pass and a river ford, in
+  the top bar.
+
+The bottom of the panel describes the selected formation, or the drill's army:
+shape, mode, phase, slot error, slowest member and distance to go.
+
+`?tester=<drill id>` opens a drill directly (for example `?tester=redirect`),
+`?tester&field=pass` opens a field and `?tester&all` runs every drill.
+[docs/FORMATIONS.md](docs/FORMATIONS.md#6-testing-drills-and-the-formation-tester)
+lists the drills, what they measure and the bugs they found.
+
 ## Project layout
 
 ```
@@ -135,11 +172,12 @@ src/
   sim/         simulation: units, combat, formations, pathfinding (no rendering)
   game/        battle setup and loop, input, computer opponent
   render/      PixiJS renderer: terrain shader, sprites, effects, camera, minimap
-  ui/          menus, army setup, HUD (plain DOM)
+  ui/          menus, army setup, HUD, formation tester (plain DOM)
   scenarios/   map generator and the four battlefields
+  tester/      formation drills, their checks and the practice fields
   audio/       music, positional sound effects and voices (WebAudio)
   assets/      sprite atlas loading and team tinting
-tests/         unit tests for formation layout and movement (Vitest)
+tests/         unit tests for formation layout and movement, and the drills (Vitest)
 bench/         balance and AI harness (not part of npm test)
 tools/         offline asset pipeline and dev helpers
 public/assets/ generated sprites, portraits, terrain, audio
@@ -153,8 +191,9 @@ at the same ticks, a battle replays identically.
 ## Development
 
 ```sh
-npm test                 # unit tests
+npm test                 # unit tests and every formation drill
 npm run typecheck
+bench/drills.sh          # drill report: DRILL=march,pass picks drills, ALL=1 lists every check
 npx vitest run --config bench/vitest.config.ts --reporter=verbose   # balance harness
 ```
 
@@ -170,7 +209,7 @@ bench/sweep.sh 'A' '{"knight":{"hp":160}}' 'B' '{"knight":{"hp":180}}'   # varia
 ```
 
 `http://localhost:5173/?battle=river-fords` skips the menus and starts a battle
-directly. `tools/dev/` has headless-browser helpers that click through the
+directly, and `?tester` opens the formation tester. `tools/dev/` has headless-browser helpers that click through the
 menus (`flow.mjs`), take screenshots (`shot.mjs`) and script formation
 manoeuvres (`formations.mjs`).
 
