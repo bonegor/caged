@@ -52,6 +52,21 @@ export interface MapSpec {
   river?: { points: { x: number; y: number }[]; width: number; fords: { at: number; half: number }[] };
   /** Paved road polyline in map fractions. */
   road?: { x: number; y: number }[];
+  /**
+   * Set pieces: straight lines of trees or rocks (map fractions), `spacing` u
+   * apart, optionally several rows deep, with gaps (`at` = fraction along the
+   * line, `half` = clear half-width in u).
+   */
+  walls?: {
+    from: { x: number; y: number };
+    to: { x: number; y: number };
+    kind: 'tree' | 'rock';
+    spacing: number;
+    rows?: number;
+    gaps?: { at: number; half: number }[];
+  }[];
+  /** Single trees or rocks at exact spots (map fractions; rock radius in u). */
+  props?: { x: number; y: number; kind: 'tree' | 'rock'; r?: number }[];
   /** Dryness 0..1 (amount of yellow grass). */
   dryness: number;
   /** Fraction-of-size radius around each spawn kept clear. */
@@ -280,6 +295,34 @@ export function generateMap(spec: MapSpec, seed: number): GameMap {
     const r = 1.8 * sizeScale;
     obstacles.push({ x: p.x, y: p.y, r, kind: 'tree', variant: rng.int(0, 1000) });
   };
+
+  // Set pieces first, so random scenery keeps clear of them.
+  for (const w of spec.walls ?? []) {
+    const a = { x: w.from.x * size, y: w.from.y * size };
+    const b = { x: w.to.x * size, y: w.to.y * size };
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    const ux = (b.x - a.x) / len;
+    const uy = (b.y - a.y) / len;
+    const blockR = w.kind === 'tree' ? 1.5 : 2.2;
+    const rows = w.rows ?? 1;
+    for (let row = 0; row < rows; row++) {
+      // Rows sit side by side, offset by half a spacing like a hedge.
+      const off = (row - (rows - 1) / 2) * w.spacing * 0.85;
+      const shift = row % 2 ? w.spacing / 2 : 0;
+      for (let d = shift; d <= len; d += w.spacing) {
+        if (w.gaps?.some((g) => Math.abs(d - g.at * len) < g.half + blockR)) continue;
+        const p = { x: a.x + ux * d - uy * off, y: a.y + uy * d + ux * off };
+        if (!inMap(p, 2) || blockedByWater(p, 1)) continue;
+        if (w.kind === 'tree') addTree(p, 0.95 + rng.next() * 0.2);
+        else obstacles.push({ x: p.x, y: p.y, r: blockR, kind: 'rock', variant: rng.int(0, 1000) });
+      }
+    }
+  }
+  for (const pr of spec.props ?? []) {
+    const p = { x: pr.x * size, y: pr.y * size };
+    if (pr.kind === 'tree') addTree(p, 1.05);
+    else obstacles.push({ x: p.x, y: p.y, r: pr.r ?? 2.4, kind: 'rock', variant: rng.int(0, 1000) });
+  }
 
   // Forests: Poisson-disk-ish sampling inside noisy blobs.
   for (const f of spec.forests) {

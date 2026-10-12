@@ -84,6 +84,13 @@ function groupKinds(kinds: UnitKind[]): SubGroup[] {
   return groups;
 }
 
+/** Full rows of perRow, the remainder in a last (centred) row: a dragged frontage is kept. */
+export function fullRows(n: number, perRow: number): number[] {
+  const rows = Array.from({ length: Math.floor(n / perRow) }, () => perRow);
+  if (n % perRow) rows.push(n % perRow);
+  return rows;
+}
+
 /** Splits n units into rows of at most perRow, sizes differing by at most one, fuller rows first. */
 export function balancedRows(n: number, perRow: number): number[] {
   const rows = Math.ceil(n / perRow);
@@ -131,7 +138,8 @@ function layoutLine(kinds: UnitKind[], shape: 'line' | 'staggered' | 'flank', wi
     halves.forEach((hn, h) => {
       if (!hn) return;
       const perRow = Math.max(1, Math.min(hn, Math.floor(halfW / lat(g) + 1e-9) + 1));
-      const rows = balancedRows(hn, perRow);
+      // A player-set frontage is filled rank by rank; the natural layout evens the ranks out.
+      const rows = width !== undefined ? fullRows(hn, perRow) : balancedRows(hn, perRow);
       rowsMax = Math.max(rowsMax, rows.length);
       const cx = halves.length === 2 ? (h === 0 ? -1 : 1) * (LAYOUT.flankGap / 2 + halfW / 2) : 0;
       rows.forEach((cnt, r) => {

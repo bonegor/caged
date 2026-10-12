@@ -4,7 +4,8 @@ import type { Application, Ticker } from 'pixi.js';
 import { World, TICK } from '../sim/world';
 import { generateMap, type GameMap, type Spawn } from '../scenarios/mapgen';
 import type { Army, Scenario } from '../scenarios/scenarios';
-import { computeLayout, slotToWorld } from '../sim/formationLayout';
+import type { FormationShape } from '../sim/formationLayout';
+import { deployFormed } from '../sim/deploy';
 import { FACTIONS, UNIT_KINDS, type FactionId, type UnitKind } from '../sim/unitTypes';
 import type { Unit } from '../sim/unit';
 import { GameRenderer, type TeamStyle } from '../render/gameRenderer';
@@ -37,19 +38,8 @@ export const TEAM_COLORS: Record<string, [number, number, number]> = {
 };
 
 /** Places an army in line formation at its spawn point. */
-export function deployArmy(world: World, team: number, army: Army, spawn: Spawn, shape: import('../sim/formationLayout').FormationShape = 'line'): Unit[] {
-  const kinds: UnitKind[] = [];
-  for (const k of UNIT_KINDS) for (let i = 0; i < army[k]; i++) kinds.push(k);
-  if (!kinds.length) return [];
-  const slots = computeLayout(kinds, shape);
-  const pose = { pos: spawn.pos, heading: spawn.heading };
-  const units: Unit[] = [];
-  for (const s of slots) {
-    const p = slotToWorld(pose, s);
-    units.push(world.spawn(team, s.kind, p, spawn.heading));
-  }
-  world.createFormation(units, shape, spawn.heading);
-  return units;
+export function deployArmy(world: World, team: number, army: Army, spawn: Spawn, shape: FormationShape = 'line'): Unit[] {
+  return deployFormed(world, team, army, { pos: spawn.pos, heading: spawn.heading }, shape);
 }
 
 export class Battle {
@@ -95,7 +85,7 @@ export class Battle {
     config: BattleConfig,
     callbacks: InputCallbacks,
     onProgress?: (f: number, label: string) => void,
-    opts: { spectator?: boolean; shape?: import('../sim/formationLayout').FormationShape } = {},
+    opts: { spectator?: boolean; shape?: FormationShape } = {},
   ): Promise<Battle> {
     onProgress?.(0.02, 'Shaping the land');
     await new Promise((r) => setTimeout(r, 16));

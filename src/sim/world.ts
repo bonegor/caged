@@ -82,6 +82,8 @@ export class World implements FormationHost {
   readonly hash = new SpatialHash<Unit>(8);
   readonly nav: NavGrid;
   winner: number | null = null;
+  /** Sandbox worlds (the formation tester) never declare a winner. */
+  endless = false;
   private nextUnitId = 1;
   private nextProjectileId = 1;
   private attackers = new Map<number, number>();
@@ -219,7 +221,8 @@ export class World implements FormationHost {
   setShape(units: Unit[], shape: FormationShape): void {
     const list = units.filter((u) => u.alive);
     if (list.length < 2) return;
-    const f = this.formationFor(list, shape);
+    // formationFor must not pre-set the shape, or setShape sees nothing to change.
+    const f = this.formationFor(list);
     f.setShape(this, shape);
   }
 
@@ -279,7 +282,7 @@ export class World implements FormationHost {
   }
 
   private checkVictory(): void {
-    if (this.winner !== null) return;
+    if (this.winner !== null || this.endless) return;
     const teams = new Set(this.units.filter((u) => u.alive).map((u) => u.team));
     if (teams.size <= 1) this.winner = teams.size === 1 ? [...teams][0] : -1;
   }
@@ -469,6 +472,10 @@ export class World implements FormationHost {
     const f = u.formation;
     const ready = !f || f.phase === 'engaged' || (f.phase === 'idle' && dist(u.pos, f.slotWorld(u)) < 1.5);
     if (still && ready) this.startSetup(u, 'deploy');
+  }
+
+  packUp(u: Unit): void {
+    if (u.kind === 'catapult' && u.deployed) this.startSetup(u, 'pack');
   }
 
   private startSetup(u: Unit, what: 'deploy' | 'pack'): void {

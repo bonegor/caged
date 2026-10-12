@@ -62,6 +62,8 @@ export interface FormationHost {
   enemyWithin(u: Unit, radius: number): boolean;
   /** Acquisition radius used for attack-move contact checks. */
   contactRadius(u: Unit): number;
+  /** Starts packing up a deployed catapult so it can move. */
+  packUp(u: Unit): void;
 }
 
 interface SyncTarget {
@@ -94,6 +96,8 @@ export class Formation {
   private sync = new Map<number, SyncTarget>();
   private syncStarted = 0;
   private syncDuration = 0;
+  /** Time the slowest member needs to reach its slot at full speed. */
+  private syncLatest = 0;
   private prevSlotWorld = new Map<number, Vec2>();
   private lagZeroSince = -1;
   private idleTimer = 0;
@@ -101,6 +105,10 @@ export class Formation {
   private contactCheckAt = 0;
   private relayoutAt = -1;
   private pivoting = false;
+  /** When the anchor of a rigid move reached the end of its path (-1: not yet). */
+  private arrivedAt = -1;
+  /** How fast the anchor moved on the last tick (u/s). */
+  private anchorSpeed = 0;
 
   constructor(
     readonly team: number,
@@ -226,6 +234,11 @@ export class Formation {
   ): void {
     if (!this.members.length) return;
     this.nav = host.nav;
+    // A marching column sent somewhere else bends from its head (see bendColumn).
+    const column =
+      this.phase === 'moving' && this.mode === 'march' && this.layoutMode === 'march' && this.path && this.relayoutAt === -1 && opts.shape === undefined
+        ? { path: this.path, s: this.s, extent: this.extent }
+        : null;
     if (opts.shape) this.shape = opts.shape;
     if (opts.width !== undefined) this.width = opts.width;
     this.attackMove = !!opts.attackMove;
@@ -248,7 +261,10 @@ export class Formation {
     const body = this.members.filter((u) => main.has(u));
     const start = this.centroid(body);
 
-    const travel = { x: dest.x - start.x, y: dest.y - start.y };
+    // Facing at the destination: the direction of travel (from the column's head
+    // when a marching column is redirected).
+    const origin = column ? column.path.poseAt(column.s + column.extent.front).pos : start;
+    const travel = { x: dest.x - origin.x, y: dest.y - origin.y };
     const travelLen = Math.hypot(travel.x, travel.y);
     const heading = opts.heading ?? (travelLen > 2 ? Math.atan2(travel.y, travel.x) : this.pose.heading);
     this.finalHeading = heading;
@@ -274,20 +290,32 @@ export class Formation {
     const formed = this.phase !== 'engaged' && this.isFormed() && this.layoutMode === 'battle' && this.sameLayout(battleSlots);
     const initialHeading = pathPts.length > 1 ? Math.atan2(pathPts[1].y - pathPts[0].y, pathPts[1].x - pathPts[0].x) : heading;
 
-    if (pathLen > FORMATION.marchDistance && this.members.length >= 4) {
+    if (pathLen > 1) for (const u of this.members) host.packUp(u);
+
+    if (pathLen > FORMATION.marchDistance && this.members.length >= 4 && column && this.bendColumn(host, column, anchor, maxRadius)) {
+      // The column keeps its order and follows its head onto the new route.
+    } else if (pathLen > FORMATION.marchDistance && this.members.length >= 4) {
       // Long move: marching column along the path, deploy near the end.
       this.mode = 'march';
       this.layoutMode = 'march';
       this.phase = 'moving';
       this.path = new SmoothPath(pathPts, 6);
-      this.s = 0;
-      this.pose = { pos: { ...start }, heading: initialHeading };
+      // File out: the head of the column starts level with the army's front, so
+      // the front ranks march off at once and the others fall in as the column
+      // passes them. Nobody has to walk back to a slot behind them.
+      const colFront = layoutExtent(computeLayout(this.kinds, 'column')).front;
+      const fx = Math.cos(initialHeading);
+      const fy = Math.sin(initialHeading);
+      const armyFront = Math.max(...body.map((u) => (u.pos.x - start.x) * fx + (u.pos.y - start.y) * fy + u.radius));
+      this.s = Math.min(0, armyFront - colFront);
+      this.pose = this.path.poseAt(this.s);
       this.layoutAndAssign('column', this.pose);
       this.resetSlotMemory();
     } else if (formed && pathLen > 1 && Math.abs(angleDiff(this.pose.heading, initialHeading)) <= FORMATION.rigidTurn) {
       // Already in shape and roughly facing the way: translate the block along the path.
       this.mode = 'rigid';
       this.phase = 'moving';
+      this.arrivedAt = -1;
       const corner = clamp(this.extent.halfWidth, 6, 30);
       this.path = new SmoothPath([this.pose.pos, ...waypoints], corner);
       this.s = 0;
@@ -297,6 +325,44 @@ export class Formation {
       this.layoutMode = 'battle';
       this.beginSync({ pos: anchor, heading });
     }
+  }
+
+  /**
+   * Re-routes a marching column from its head: the new path is the stretch of
+   * road the column is on (tail to head) followed by the route from the head
+   * to the new destination, so every member keeps its place and the column
+   * snakes round. Refuses sharp turns back on itself.
+   */
+  private bendColumn(host: FormationHost, col: { path: SmoothPath; s: number; extent: Extent }, anchor: Vec2, maxRadius: number): boolean {
+    const headS = col.s + col.extent.front;
+    const head = col.path.poseAt(headS);
+    const route = host.nav.findPath(head.pos, anchor, maxRadius + 2) ?? host.nav.findPath(head.pos, anchor, maxRadius);
+    if (!route?.length) return false;
+    const first = route[0];
+    if (Math.abs(angleDiff(head.heading, Math.atan2(first.y - head.pos.y, first.x - head.pos.x))) > (125 * Math.PI) / 180) return false;
+    const tailS = col.s + col.extent.back - 6;
+    const trail: Vec2[] = [];
+    for (let s = tailS; s < headS - 1; s += 2) trail.push(col.path.poseAt(s).pos);
+    trail.push(head.pos);
+    const path = new SmoothPath([...trail, ...route], 6);
+    // Where the head lies on the new path.
+    let headOnPath = 0;
+    let best = Infinity;
+    for (let i = 0; i < path.pts.length && path.s[i] <= headS - tailS + 12; i++) {
+      const d = dist(path.pts[i], head.pos);
+      if (d < best) {
+        best = d;
+        headOnPath = path.s[i];
+      }
+    }
+    this.mode = 'march';
+    this.layoutMode = 'march';
+    this.phase = 'moving';
+    this.path = path;
+    this.s = headOnPath - col.extent.front;
+    this.pose = path.poseAt(this.s);
+    this.lagZeroSince = -1;
+    return true;
   }
 
   /** Re-forms in place with the given (or current) shape and heading. */
@@ -312,13 +378,16 @@ export class Formation {
     }
     this.layoutMode = 'battle';
     this.attackMove = false;
+    this.dest = null;
     this.beginSync({ pos, heading: heading ?? this.pose.heading });
   }
 
   setShape(host: FormationHost, shape: FormationShape): void {
-    if (shape === this.shape && this.phase !== 'engaged') return;
+    // Same shape on a laid-out formation that isn't fighting: nothing to do.
+    if (shape === this.shape && this.slots.length && this.phase !== 'engaged') return;
     this.shape = shape;
-    if (this.phase === 'moving' && this.dest) {
+    if ((this.phase === 'moving' || this.phase === 'forming') && this.dest) {
+      // Keep going where we were going, in the new shape.
       this.orderMove(host, this.dest, { heading: this.finalHeading, attackMove: this.attackMove });
     } else {
       this.reform(host);
@@ -326,13 +395,13 @@ export class Formation {
   }
 
   /** Begin synchronized arrival at `pose` (battle layout). */
-  private beginSync(pose: Pose): void {
+  private beginSync(pose: Pose, keepPlaces = false): void {
     this.mode = 'sync';
     this.phase = 'forming';
     this.path = null;
     this.pose = { pos: { ...pose.pos }, heading: pose.heading };
     this.finalHeading = pose.heading;
-    this.layoutAndAssign(this.shape, this.pose);
+    this.layoutAndAssign(this.shape, this.pose, keepPlaces);
     this.sync.clear();
     const times: number[] = [];
     const entries: [Unit, Vec2, number][] = [];
@@ -354,6 +423,7 @@ export class Formation {
       this.sync.set(u.id, { target, speed: Math.min(u.speed, speed) });
     }
     this.syncDuration = T;
+    this.syncLatest = maxT;
     this.syncStarted = -1;
     this.resetSlotMemory();
   }
@@ -437,7 +507,11 @@ export class Formation {
         break;
       case 'forming':
         if (this.syncStarted < 0) this.syncStarted = host.time;
-        if (this.settledRatio() >= 0.9 || host.time - this.syncStarted > this.syncDuration + 4) {
+        // Formed when everyone stands in place. A member that cannot get to its
+        // slot (blocked, shoved) may hold things up for a while, but not forever.
+        const settled = this.settledRatio();
+        const late = host.time - this.syncStarted - Math.max(this.syncDuration, this.syncLatest);
+        if (settled >= 1 || (settled >= 0.9 && late > 2) || late > 8) {
           this.phase = 'idle';
           this.idleTimer = 0;
         }
@@ -459,14 +533,17 @@ export class Formation {
         break;
       }
       case 'idle': {
-        this.idleTimer += dt;
-        if (this.idleTimer >= 2) {
+        // Members pushed out of place simply walk back to their slots. Only if
+        // someone stays well away from its slot for a long while (its slot
+        // can't be reached) is the formation re-laid out where it stands,
+        // keeping everyone else's place.
+        const calm = this.members.every((u) => !u.target && u.memberFlag !== 'engaged');
+        const displaced = calm && this.members.some((u) => u.memberFlag === 'ok' && dist(u.pos, this.slotWorld(u)) > 3);
+        this.idleTimer = displaced ? this.idleTimer + dt : 0;
+        if (this.idleTimer > 6) {
           this.idleTimer = 0;
-          const allIdle = this.members.every((u) => !u.target && u.memberFlag !== 'engaged');
-          if (allIdle && this.members.some((u) => u.memberFlag === 'returning' || dist(u.pos, this.slotWorld(u)) > 3)) {
-            const settledEnough = this.members.every((u) => u.memberFlag === 'ok' || u.memberFlag === 'straggler');
-            if (settledEnough) this.reform(host);
-          }
+          const pos = this.nav ? fitAnchor(this.nav, this.slots, this.pose.pos, this.pose.heading) : this.pose.pos;
+          this.beginSync({ pos, heading: this.pose.heading }, true);
         }
         break;
       }
@@ -562,17 +639,17 @@ export class Formation {
     let lag = 0;
     let laggard: Unit | null = null;
     for (const u of active) {
-      if (u.busySetup) {
-        lag = Math.max(lag, FORMATION.lagStop);
-        continue;
-      }
       const sw = this.slotWorld(u);
       const f = this.slotForward(u);
       const ex = sw.x - u.pos.x;
       const ey = sw.y - u.pos.y;
       const along = ex * f.x + ey * f.y;
+      // A member whose slot is still behind it is waiting to fall in: the
+      // anchor has to keep going to bring the slot to it, so it is no laggard.
+      if (along < -1) continue;
       const lateral = Math.abs(ex * f.y - ey * f.x);
-      const l = Math.max(along, lateral * 0.5);
+      // Catapults packing up hold the formation back until they can roll.
+      const l = u.busySetup ? FORMATION.lagStop : Math.max(along, lateral * 0.5);
       if (l > lag) {
         lag = l;
         laggard = u;
@@ -590,12 +667,14 @@ export class Formation {
       this.lagZeroSince = -1;
     }
 
+    const sBefore = this.s;
     if (!this.pivoting) {
       this.s = Math.min(path.length, this.s + v * dt);
       const p = path.poseAt(this.s);
       if (this.mode === 'rigid') {
-        // Rigid block: turn towards the path tangent at a rate the outer ranks can follow.
-        const omega = Math.max(0.15, (kMin * vMin - v) / Math.max(halfWidth, 1));
+        // Rigid block: turn towards the path tangent at a rate the outer ranks can
+        // follow, and not at all while waiting for members (e.g. catapults packing up).
+        const omega = Math.max(0.15, (kMin * vMin - v) / Math.max(halfWidth, 1)) * fLag;
         const d = angleDiff(this.pose.heading, p.heading);
         this.pose.heading += clamp(d, -omega * dt, omega * dt);
       } else {
@@ -604,10 +683,13 @@ export class Formation {
       this.pose.pos = p.pos;
     }
 
+    this.anchorSpeed = (this.s - sBefore) / dt;
     const remaining = path.length - this.s;
     if (this.mode === 'march') {
-      const battleDepth = layoutExtent(computeLayout(this.kinds, this.shape, this.width)).front * 2;
-      const deployDist = (this.extent.front - this.extent.back) / 2 + battleDepth + 8;
+      // Deploy when the head of the column reaches the front line of the battle
+      // formation at the destination; the rest of the column closes up behind.
+      const battleFront = layoutExtent(computeLayout(this.kinds, this.shape, this.shape === 'box' ? undefined : this.width)).front;
+      const deployDist = Math.max(4, this.extent.front - battleFront + 2);
       if (remaining <= deployDist) {
         // Deploy: battle layout at the destination with synchronized arrival.
         this.layoutMode = 'battle';
@@ -624,11 +706,21 @@ export class Formation {
         this.pivoting = true;
         const omega = Math.max(0.2, (kMin * vMin) / Math.max(halfWidth, 1)) * 0.8;
         this.pose.heading += clamp(turn, -omega * dt, omega * dt);
-      } else if (this.settledRatio() >= 0.9 || lag < 1) {
+      } else {
+        // Close enough: face exactly the final way now, so the slots don't
+        // shift again when the formation is declared formed.
         this.pose.heading = this.finalHeading;
-        this.phase = 'idle';
-        this.idleTimer = 0;
-        this.pivoting = false;
+        // Arrived: formed once everyone stands in place (or nearly everyone,
+        // after a grace period for a member still finding its way round trees).
+        if (this.arrivedAt < 0) this.arrivedAt = host.time;
+        const settled = this.settledRatio();
+        const waited = host.time - this.arrivedAt;
+        if (settled >= 1 || (settled >= 0.9 && waited > 3) || waited > 10) {
+          this.pose.heading = this.finalHeading;
+          this.phase = 'idle';
+          this.idleTimer = 0;
+          this.pivoting = false;
+        }
       }
     }
   }
@@ -695,6 +787,22 @@ export class Formation {
         continue;
       }
       const cap = u.speed * catchUp(u);
+      if (moving && this.mode === 'march') {
+        // Falling in: a member whose column slot is still behind it waits where
+        // it stands and steps in as the slot comes past, rather than crowding
+        // sideways into the column ahead of time.
+        const f = this.slotForward(u);
+        const along = ex * f.x + ey * f.y;
+        if (along < -1) {
+          const lateral = Math.abs(ex * f.y - ey * f.x);
+          const tSlot = -along / Math.max(Math.hypot(sv.x, sv.y), 0.01);
+          if (tSlot > lateral / cap + 0.5) {
+            u.desired = { x: 0, y: 0 };
+            u.path = [];
+            continue;
+          }
+        }
+      }
       if (err > 3 && !host.nav.lineClear(u.pos, slotW, u.radius * 0.8)) {
         // Slot not directly reachable (obstacle in between): path to it.
         u.speedCap = cap;
@@ -704,8 +812,9 @@ export class Formation {
       u.path = [];
       let vx = sv.x + FORMATION.gain * ex;
       let vy = sv.y + FORMATION.gain * ey;
-      if (moving) {
-        // Never walk backwards against the march: wait for the slot instead of U-turning.
+      if (moving && this.anchorSpeed > 0.3) {
+        // Never walk backwards against the march: wait for the slot instead of
+        // U-turning. (Once the anchor has stopped, stepping back into place is fine.)
         const f = this.slotForward(u);
         const along = vx * f.x + vy * f.y;
         if (along < 0) {
@@ -794,7 +903,9 @@ export function setPathGoal(u: Unit, goal: Vec2, host: FormationHost, every: num
     if (host.nav.lineClear(u.pos, goal, u.radius * 0.8)) {
       u.path = [{ ...goal }];
     } else {
-      u.path = host.nav.findPath(u.pos, goal, u.radius) ?? [{ ...goal }];
+      // Same body size as the collision check (0.8 r), so a path never starts
+      // from a spot the unit can't actually reach.
+      u.path = host.nav.findPath(u.pos, goal, u.radius * 0.8) ?? [{ ...goal }];
     }
     u.pathGoal = { ...goal };
     u.repathAt = host.time + every;
